@@ -1,0 +1,19 @@
+TPacket ::= {
+    Header
+    Command[]
+}
+
+Header ::= {
+    Length : 16;
+#if client > 860
+    Adler : 4;
+#endif
+}
+
+Command ::= {
+    
+}
+
+
+####################
+

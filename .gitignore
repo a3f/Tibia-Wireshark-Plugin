@@ -1,0 +1,9 @@
+.deps/
+.libs/
+e/
+*.lo
+*.la
+*.o
+*.a
+*.sw*
+*.pyc

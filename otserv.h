@@ -1,0 +1,22 @@
+#ifndef OTSERV_H
+#define OTSERV_H
+
+static const char __attribute__((unused)) ot_p[] =
+"111071b206bafb9c7a2287d7c8d17a42e32abee88dfe9520692b5439d9675817ff4f8c94a4abcd4b5f88e220f3a8658e39247a46c6983d85618fd891001a0acb1";
+
+
+static const char __attribute__((unused))ot_q[] =
+"91b37307abe12c05a1b78754746cda444177a784b035cbb96c945affdc022d21da4bd25a4eae259638153e9d73c97c89092096a459e5d16bcadd07fa9d504885";
+
+static const char __attribute__((unused))ot_d[] =
+"428bd3b5346daf71a761106f71a43102f8c857d6549c54660bb6378b52b0261399de8ce648bac410e2ea4e0a1ced1fac2756331220ca6db7ad7b5d440b7828865856e7aa6d8f45837feee9b4a3a0aa21322a1e2ab75b1825e786cf81a28a8a09a1e28519db64ff9baf311e850c2bfa1fb7b08a056cc337f7df443761aefe8d81";
+
+static const unsigned __attribute__((unused)) ot_e = 65537;
+
+static const char __attribute__((unused)) ot_n[] =
+"9b646903b45b07ac956568d87353bd7165139dd7940703b03e6dd079399661b4a837aa60561d7ccb9452fa0080594909882ab5bca58a1a1b35f8b1059b72b1212611c6152ad3dbb3cfbee7adc142a75d3d75971509c321c5c24a5bd51fd460f01b4e15beb0de1930528a5d3f15c1e3cbf5c401d6777e10acaab33dbe8d5b7ff5";
+
+static const char __attribute__((unused)) tibia_n_860[] = 
+"bc27f992a96b8e2a43f4dfbe1cef8fd51cf43d2803ee34fbbd8634d8b4fa32f7d9d9e159978dd29156d62f4153e9c5914263fc4986797e12245c1a6c4531efe48a6f7c2efffff18f2c9e1c504031f3e4a2c788ee96618fffcec2c3e5bfafaf743b3fc7a872ee60a52c29aa688bdaf8692305312882f1f66ee9d8aeb7f84b1949";
+
+#endif
