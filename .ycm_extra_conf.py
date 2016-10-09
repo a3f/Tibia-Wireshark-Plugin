@@ -28,7 +28,7 @@ flags = [
     '-isystem', '/usr/local/include',
     '-isystem', '/usr/local/include/glib-2.0/glib',
     '-isystem', '/usr/local/include/glib-2.0',
-    '-isystem', '/usr/local/Cellar/glib/2.42.2/lib/glib-2.0/include',
+    '-isystem', '/usr/local/Cellar/glib/2.50.0/lib/glib-2.0/include',
     '-isystem', '/Users/a3f/prjs/wireshark-tibia-dissector/wireshark',
 
     '-isystem', '/usr/local/include/eigen3',
