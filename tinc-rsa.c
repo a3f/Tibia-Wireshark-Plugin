@@ -321,29 +321,29 @@ size_t rsa_size(rsa_t *rsa) {
 
 int rsa_public_encrypt(rsa_t *rsa, void const *in, size_t len, void *out_) {
 	gcry_mpi_t inmpi, outmpi;
-    int pad;
+    size_t pad;
     unsigned char *out = (unsigned char*)out_;
 	check(gcry_mpi_scan(&inmpi, GCRYMPI_FMT_USG, in, len, NULL));
 
-	outmpi = gcry_mpi_new(len * 8);
+	outmpi = gcry_mpi_new((unsigned int)len * 8);
 	gcry_mpi_powm(outmpi, inmpi, rsa->e, rsa->n);
 
 	pad = len - (gcry_mpi_get_nbits(outmpi) + 7) / 8;
 	while(pad--)
 		*out++ = 0;
 
-	check(gcry_mpi_print(GCRYMPI_FMT_USG, out,len, NULL, outmpi));
+	check(gcry_mpi_print(GCRYMPI_FMT_USG, out, len, NULL, outmpi));
 
 	return 1;
 }
 
 int rsa_private_decrypt(rsa_t *rsa, void const *in, size_t len, void *out_) {
 	gcry_mpi_t inmpi = gcry_mpi_new(0), outmpi;
-    int pad;
+    size_t pad;
     unsigned char *out = (unsigned char*)out_;
 	check(gcry_mpi_scan(&inmpi, GCRYMPI_FMT_USG, in, len, NULL));
 
-	outmpi = gcry_mpi_new(len * 8);
+	outmpi = gcry_mpi_new((unsigned int)len * 8);
     /*sprintf(debug_buffer, "*(rsa->d=%p) = %x, *(rsa->n=%p) = %x\n", rsa->d, rsa->d ? *(unsigned*)rsa->d : 1, rsa->n, rsa->n ? *(unsigned*)rsa->n : 1);*/
 	gcry_mpi_powm(outmpi, inmpi, rsa->d, rsa->n);
 
