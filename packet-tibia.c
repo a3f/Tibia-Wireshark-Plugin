@@ -30,6 +30,7 @@
 #include "config.h"
 #endif
 
+#include <zlib.h>
 #include <glib.h>
 #include <epan/packet.h>
 #include <epan/prefs.h>
@@ -181,15 +182,24 @@ static gint ett_command= -1;
 static gint ett_charlist= -1;
 
 #define CONVO_ACTIVE 0x01
-#define CONVO_USES_ADLER32 0x02
-#define CONVO_USES_XTEA 0x04
+#define CONVO_HAS_ADLER32 0x02
+#define CONVO_HAS_XTEA 0x04
 #define CONVO_XTEA_KNOWN 0x08
 #define CONVO_LOGINSERV 0x10
+#define CONVO_HAS_RSA 0x20
+#define CONVO_HAS_ACCNAME 0x40
+#define CONVO_HAS_HWINFO 0x80
+#define CONVO_HAS_GMBYTE 0x100
 void version_get_flags(unsigned *flags, guint16 version) {
-    if (version >= GUINT16_FROM_LE(831))
-        *flags |= CONVO_USES_ADLER32;
+    *flags |= CONVO_HAS_GMBYTE;
+    if (version >= 761)
+        *flags |= CONVO_HAS_RSA | CONVO_HAS_XTEA;
+    if (version >= 830)
+        *flags |= CONVO_HAS_ADLER32 | CONVO_HAS_ACCNAME;
+    if (version >= 842)
+        *flags |= CONVO_HAS_HWINFO;
 }
-struct tibia_convo{
+struct tibia_convo {
     guint16 version;
     guint32 xtea_key[4];
     char *char_name;
@@ -207,8 +217,8 @@ static struct tibia_convo *tibia_get_convo(packet_info *pinfo)
     if (convo == NULL)
     {
         convo = wmem_new(wmem_file_scope(), struct tibia_convo);
-        convo->flags = CONVO_USES_XTEA /*0; FIXME: this should be calculated from client version*/;
         convo->char_name = "";
+        convo->version = 0;
         /*FIXME: there gotta be a cleaner way..*/
         if (pinfo->srcport >= 0xC000)
         {
@@ -275,6 +285,28 @@ static const value_string from_gameserv_packet_types[] = {
     { 0, NULL }
 };
 
+static guint16 version_from_charlist_request_packet(const guint8 *buf, size_t len) {
+    /* credits go to tulio150 on tpforums.org */
+    switch (len) {
+        case 149: return 830 * (buf[6] == CLIENT_GET_CHARLIST);
+        case 145: return 761 * (buf[2] == CLIENT_GET_CHARLIST);
+        default:
+        if (23 <= len && len <= 52) return 700 * (buf[2] == CLIENT_GET_CHARLIST);
+    }
+    return 0;
+}
+
+static guint16 version_from_game_login_packet(const guint8 *buf, size_t len) {
+    /* credits go to tulio150 on tpforums.org */
+    switch (len) {
+        case 137: return 830 * (buf[6] == CLIENT_LOGIN_CHAR);
+        case 133: return 761 * (buf[2] == CLIENT_LOGIN_CHAR);
+        default:
+        if (23 <= len && len <= 52) return 700 * (buf[2] == CLIENT_GET_CHARLIST);
+    }
+    return 0;
+}
+
 static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree);
 static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree);
 static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *prinfo, proto_tree *mytree);
@@ -290,21 +322,39 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
     proto_tree *mytree = NULL, *subtree = NULL;
     proto_item *ti = NULL, *subti = NULL;
     guint16 plen = tvb_get_guint16(tvb, 0, ENC_LITTLE_ENDIAN);
-    guint8 ptype = tvb_get_guint16(tvb, 6, ENC_LITTLE_ENDIAN);
+    guint16 loginserv_protover, gameserv_protover;
     (void)unknown; (void)len;
-
-    convo = tibia_get_convo(pinfo);
 
     /*FIXME: if announced length != real length it's not a tibia packet?*/
     if (tvb_captured_length_remaining(tvb, 2) != plen)
         return -1;
 
-    /*fixme check client before doing this shit*/
-    if (plen == 149 && ptype == CLIENT_GET_CHARLIST)
-        kind = GET_CHARLIST;
-    else if (plen == 137 && ptype == CLIENT_LOGIN_CHAR)
-        kind = CHAR_LOGIN;
+    convo = tibia_get_convo(pinfo);
 
+    loginserv_protover = version_from_charlist_request_packet(tvb_get_ptr(tvb, 0, -1), plen);
+    gameserv_protover = version_from_game_login_packet(tvb_get_ptr(tvb, 0, -1), plen);
+        dprintf(1,"gserv_proto: %d lserv_proto %d\n", gameserv_protover, loginserv_protover);
+    if (loginserv_protover && !gameserv_protover) {
+        kind = GET_CHARLIST;
+        if (!convo->version)
+            version_get_flags(&convo->flags, convo->version = loginserv_protover);
+    }
+    else if (gameserv_protover && !loginserv_protover) {
+        kind = CHAR_LOGIN;
+        if (!convo->version)
+            version_get_flags(&convo->flags, convo->version = gameserv_protover);
+    }
+
+    /* Is Adler32 correct? */
+#if 0
+    if (!convo->version) {
+        guint32 a32 = tvb_get_guint32(tvb, 2, ENC_LITTLE_ENDIAN);
+        gint a32len = tvb_captured_length_remaining(tvb, 6);
+        if (a32 == adler32(1, tvb_get_ptr(tvb, 6, -1), a32len)) {
+            convo->flags |= CONVO_HAS_ADLER32;
+        }
+    }
+#endif
 
     if (pinfo->srcport == convo->servport)
         col_set_str(pinfo->cinfo, COL_PROTOCOL, "Tibia server");
@@ -322,12 +372,14 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
     mytree = proto_item_add_subtree(ti, ett_tibia);
     proto_tree_add_item(mytree, hf_len, tvb, offset, 2, ENC_LITTLE_ENDIAN);
     offset += 2;
-    proto_tree_add_item(mytree, hf_adler32, tvb, offset, 4, ENC_BIG_ENDIAN);
-    offset += 4;
+    if (convo->flags & CONVO_HAS_ADLER32) {
+        proto_tree_add_item(mytree, hf_adler32, tvb, offset, 4, ENC_BIG_ENDIAN);
+        offset += 4;
+    }
     switch (kind) {
         default:
 
-            if (((convo->flags & CONVO_USES_XTEA) && !(convo->flags & CONVO_XTEA_KNOWN)) || !decode_xtea)
+            if (((convo->flags & CONVO_HAS_XTEA) && !(convo->flags & CONVO_XTEA_KNOWN)) || !decode_xtea)
             {
                 proto_tree_add_item(mytree, hf_undecoded_xtea_data, tvb, offset, plen - offset, ENC_NA);
                 return offset;
@@ -335,7 +387,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
 
             tvb_decrypted = tvb;
             len = tvb_captured_length_remaining(tvb, offset);
-            if (convo->flags & CONVO_USES_XTEA) {
+            if (convo->flags & CONVO_HAS_XTEA) {
                 guint32 *decrypted_buffer;
                 len = tvb_captured_length_remaining(tvb, offset);
                 if (len % 8 != 0)
@@ -415,12 +467,22 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
             proto_tree_add_item(mytree, hf_xtea_key, tvb_decrypted, offset, 16, ENC_BIG_ENDIAN);
             offset += 16;
             convo->flags  |= CONVO_XTEA_KNOWN;
-            if (kind == CHAR_LOGIN) {
+            if ((convo->flags & CONVO_HAS_GMBYTE) && kind == CHAR_LOGIN) {
                 proto_tree_add_item(mytree, hf_loginflags_gm, tvb_decrypted, offset, 1, ENC_BIG_ENDIAN);
                 offset += 1;
             }
-            proto_tree_add_item(mytree, hf_acc_name, tvb_decrypted, offset, 2,  ENC_LITTLE_ENDIAN | ENC_ASCII);
-            offset += tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN) + 2;
+            if (convo->flags & CONVO_HAS_ACCNAME) {
+                guint16 acclen = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
+                if (offset + acclen + 2 > plen) return -1;
+                proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 2 + acclen, NULL, " %.*s", acclen, tvb_get_ptr(tvb_decrypted, offset + 2, acclen));
+                offset += 2 + acclen;
+            } else /* account number */ {
+                /*proto_tree_add_item(mytree, hf_acc_name, tvb_decrypted, offset, 4,  ENC_LITTLE_ENDIAN);*/
+                guint32 accnum = tvb_get_guint32(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
+                proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 4, NULL, " %u", accnum); 
+                offset += 4;
+
+            }
 
             if (kind == CHAR_LOGIN) {
                 len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN) + 2;
@@ -618,7 +680,7 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
         /*FIXME: extract the pointer from cmdti instead, somehoe*/
         str = try_val_to_str(cmd, from_gameserv_packet_types);
         str = str ? str : "Unknown";
-        // TODO: show packet hex id only on unknown packets
+        /* TODO: show packet hex id only on unknown packets */
         if (custom)
             proto_item_set_text(cmdti, "Command: %s (0x%x) %s", str, cmd, custom);
         proto_item_set_len(cmdti, 1);
@@ -860,8 +922,8 @@ proto_register_tibia(void)
                 NULL, HFILL }
         },
         { &hf_acc_name,
-            { "Account name", "tibia.acc",
-                FT_UINT_STRING, BASE_NONE,
+            { "Account", "tibia.acc",
+                FT_STRING, BASE_NONE,
                 NULL, 0x0,
                 NULL, HFILL }
         },
@@ -872,7 +934,7 @@ proto_register_tibia(void)
                 NULL, HFILL }
         },
         { &hf_acc_pass,
-            { "Account password", "tibia.pass",
+            { "Password", "tibia.pass",
                 FT_UINT_STRING, BASE_NONE,
                 NULL, 0x0,
                 NULL, HFILL }
@@ -1022,7 +1084,7 @@ proto_register_tibia(void)
         &ett_file_versions,
         &ett_charlist,
     };
-    TRACE("initializing Tibia");
+    TRACE("initializing Tibia " __DATE__ " " __TIME__ "\n");
     proto_tibia = proto_register_protocol (
             "Tibia Protocol", /* name   */
             "1Tibia",      /* short name */

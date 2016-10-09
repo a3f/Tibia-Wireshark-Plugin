@@ -1,6 +1,6 @@
 # Tibia Wireshark Plugin
 
-Tested working with 8.6, maybe works with more recent versions too. Currently RSA private keys need to be hardcoded in, and no way to specify a XTEA key exists.
+Tested working with 8.6 and 8.1, maybe works with more recent versions too. Currently RSA private keys need to be hardcoded in, and no way to specify a XTEA key exists.
 
 If the dissector captures the symmetric key exchange, packets will be decoded correctly afterwards.
 
