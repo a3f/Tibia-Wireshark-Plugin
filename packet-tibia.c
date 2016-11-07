@@ -139,6 +139,8 @@ static int hf_loginflags_gm = -1;
 static int hf_acc_name = -1;
 static int hf_char_name = -1;
 static int hf_acc_pass = -1;
+static int hf_char_name_convo = -1;
+static int hf_acc_pass_convo = -1;
 static int hf_hwinfo = -1;
 static int hf_padding = -1;
 static int hf_xtea_len = -1;
@@ -202,7 +204,7 @@ void version_get_flags(unsigned *flags, guint16 version) {
 struct tibia_convo {
     guint16 version;
     guint32 xtea_key[4];
-    char *char_name;
+    char *acc, *pass, *char_name;
     unsigned flags;
     guint16 clientport;
     guint16 servport;
@@ -217,7 +219,7 @@ static struct tibia_convo *tibia_get_convo(packet_info *pinfo)
     if (convo == NULL)
     {
         convo = wmem_new(wmem_file_scope(), struct tibia_convo);
-        convo->char_name = "";
+        convo->char_name = convo->acc = convo->pass = NULL;
         convo->version = 0;
         /*FIXME: there gotta be a cleaner way..*/
         if (pinfo->srcport >= 0xC000)
@@ -540,6 +542,18 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
 
     ti = proto_tree_add_item(tree, proto_tibia, tvb, 0, -1, ENC_NA);
     mytree = proto_item_add_subtree(ti, ett_tibia);
+
+    if (convo->char_name) {
+        ti = proto_tree_add_string(mytree, hf_acc_name, tvb, offset, 0, convo->acc);
+        PROTO_ITEM_SET_GENERATED(ti);
+
+        ti = proto_tree_add_string(mytree, hf_acc_pass_convo, tvb, offset, 0, convo->pass);
+        PROTO_ITEM_SET_GENERATED(ti);
+
+        ti = proto_tree_add_string(mytree, hf_char_name_convo, tvb, offset, 0, convo->char_name);
+        PROTO_ITEM_SET_GENERATED(ti);
+    }
+
     proto_tree_add_item(mytree, hf_len, tvb, offset, 2, ENC_LITTLE_ENDIAN);
     offset += 2;
     if (convo->flags & CONVO_HAS_ADLER32) {
@@ -644,24 +658,42 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
             if (convo->flags & CONVO_HAS_ACCNAME) {
                 guint16 acclen = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
                 if (offset + acclen + 2 > plen) return -1;
-                proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 2 + acclen, NULL, " %.*s", acclen, tvb_get_ptr(tvb_decrypted, offset + 2, acclen));
+                if (convo) {
+                    convo->acc = (char*)tvb_memdup(wmem_file_scope(), tvb_decrypted, offset + 2, acclen + 1);
+                    convo->acc[acclen] = '\0';
+                }
+                proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 2 + acclen, NULL, "%.*s", acclen, tvb_get_ptr(tvb_decrypted, offset + 2, acclen));
                 offset += 2 + acclen;
             } else /* account number */ {
                 /*proto_tree_add_item(mytree, hf_acc_name, tvb_decrypted, offset, 4,  ENC_LITTLE_ENDIAN);*/
                 guint32 accnum = tvb_get_guint32(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
-                proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 4, NULL, " %u", accnum); 
+                if (convo) {
+                    convo->acc = wmem_strdup_printf(wmem_file_scope(), "%lu", (unsigned long)accnum);
+                }
+                proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 4, NULL, "%lu", (unsigned long)accnum); 
                 offset += 4;
 
             }
 
             if (kind == CHAR_LOGIN) {
-                len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN) + 2;
-                convo->char_name = (char*)tvb_memdup(wmem_file_scope(), tvb_decrypted, offset, len);
+                len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
+                if (convo) {
+                    convo->char_name = (char*)tvb_memdup(wmem_file_scope(), tvb_decrypted, offset + 2, len + 1);
+                    convo->char_name[len] = '\0';
+                }
+
                 proto_tree_add_item(mytree, hf_char_name, tvb_decrypted, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
-                offset += len;
+                offset += len + 2;
+            }
+
+            len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
+            if (convo)
+            {
+                convo->pass = (char*)tvb_memdup(wmem_file_scope(), tvb_decrypted, offset + 2, len + 1);
+                convo->pass[len] = '\0';
             }
             proto_tree_add_item(mytree, hf_acc_pass, tvb_decrypted, offset, 2,  ENC_LITTLE_ENDIAN | ENC_ASCII);
-            offset += tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN) + 2;
+            offset += len + 2;
 
             if (kind == GET_CHARLIST)
                 proto_tree_add_item(mytree, hf_hwinfo, tvb_decrypted,
@@ -1106,6 +1138,18 @@ proto_register_tibia(void)
         { &hf_acc_pass,
             { "Password", "tibia.pass",
                 FT_UINT_STRING, BASE_NONE,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_char_name_convo,
+            { "Character name", "tibia.char",
+                FT_STRING, BASE_NONE,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_acc_pass_convo,
+            { "Password", "tibia.pass",
+                FT_STRING, BASE_NONE,
                 NULL, 0x0,
                 NULL, HFILL }
         },
