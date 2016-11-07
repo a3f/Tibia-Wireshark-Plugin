@@ -347,7 +347,13 @@ int rsa_private_decrypt(rsa_t *rsa, void const *in, size_t len, void *out_) {
     /*sprintf(debug_buffer, "*(rsa->d=%p) = %x, *(rsa->n=%p) = %x\n", rsa->d, rsa->d ? *(unsigned*)rsa->d : 1, rsa->n, rsa->n ? *(unsigned*)rsa->n : 1);*/
 	gcry_mpi_powm(outmpi, inmpi, rsa->d, rsa->n);
 
-	pad = len - (gcry_mpi_get_nbits(outmpi) + 7) / 8;
+    pad = /*len*/ 128 - (gcry_mpi_get_nbits(outmpi) + 7) / 8;
+#if 0
+    dprintf(1, "[%d] len = %u, pad = %u, bits = %u\n",
+                __LINE__,
+                (unsigned)len, (unsigned)pad, (unsigned)gcry_mpi_get_nbits(outmpi)
+    );
+#endif
 	while(pad--)
 		*out++ = 0;
 

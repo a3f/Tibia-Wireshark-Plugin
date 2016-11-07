@@ -505,7 +505,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
 
     loginserv_protover = version_from_charlist_request_packet(tvb_get_ptr(tvb, 0, -1), plen);
     gameserv_protover = version_from_game_login_packet(tvb_get_ptr(tvb, 0, -1), plen);
-        dprintf(1,"gserv_proto: %d lserv_proto %d\n", gameserv_protover, loginserv_protover);
+        /*dprintf(1,"gserv_proto: %d lserv_proto %d\n", gameserv_protover, loginserv_protover);*/
     if (loginserv_protover && !gameserv_protover) {
         kind = GET_CHARLIST;
         if (!convo->version)
