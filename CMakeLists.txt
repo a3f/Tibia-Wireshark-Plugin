@@ -22,7 +22,7 @@
 include(WiresharkPlugin)
 
 # Plugin name and version info (major minor micro extra)
-set_module_info(tibia 0 0 1 0)
+set_module_info(tibia 0 0 2 0)
 
 set(DISSECTOR_SRC
 	packet-tibia.c

@@ -21,6 +21,9 @@
 #
 
 include $(top_srcdir)/Makefile.am.inc
+include ../Makefile.am.inc
+
+PLUGIN_NAME = tibia
 
 AM_CPPFLAGS = -I$(top_srcdir)
 
@@ -40,7 +43,10 @@ tibia_la_SOURCES = \
 	$(SRC_FILES)	\
 	$(HEADER_FILES)
 
-tibia_la_LDFLAGS = -module -avoid-version
+tibia_la_CPPFLAGS = $(AM_CPPFLAGS) $(PLUGIN_CPPFLAGS)
+tibia_la_CFLAGS = $(AM_CFLAGS) $(PLUGIN_CFLAGS)
+
+tibia_la_LDFLAGS = -module -avoid-version $(PLUGIN_LDFLAGS)
 tibia_la_LIBADD = @PLUGIN_LIBS@
 
 # Libs must be cleared, or else libtool won't create a shared module.

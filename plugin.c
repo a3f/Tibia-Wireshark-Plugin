@@ -18,19 +18,23 @@
 WS_DLL_PUBLIC_DEF void plugin_register (void);
 WS_DLL_PUBLIC_DEF const gchar version[] = VERSION;
 
+extern void proto_register_tibia(void);
+
 /* Start the functions we need for the plugin stuff */
 
 WS_DLL_PUBLIC_DEF void
 plugin_register (void)
 {
-    {extern void proto_register_tibia (void); proto_register_tibia ();}
+    proto_register_tibia();
 }
+
+extern void proto_reg_handoff_tibia(void);
 
 WS_DLL_PUBLIC_DEF void plugin_reg_handoff(void);
 
 WS_DLL_PUBLIC_DEF void
 plugin_reg_handoff(void)
 {
-    {extern void proto_reg_handoff_tibia (void); proto_reg_handoff_tibia ();}
+    proto_reg_handoff_tibia();
 }
 #endif

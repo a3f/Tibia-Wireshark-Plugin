@@ -235,31 +235,101 @@ static struct tibia_convo *tibia_get_convo(packet_info *pinfo)
     return convo;
 }
 
-enum {CLIENT_GET_CHARLIST = 0x1, CLIENT_SPEAK = 0x96, CLIENT_LOGIN_CHAR = 0xA, CLIENT_PING = 0x1E,
-        CLIENT_MOVE_NORTH = 0x65,
-        CLIENT_MOVE_EAST = 0x66,
-        CLIENT_MOVE_SOUTH = 0x67,
-        CLIENT_MOVE_WEST = 0x68,
-        CLIENT_MOVE_NE = 0x6A,
-        CLIENT_MOVE_SE = 0x6B,
-        CLIENT_MOVE_SW = 0x6C,
-        CLIENT_MOVE_NW = 0x6D,
-        CLIENT_MOVE_ITEM = 0x78
+enum {
+    // from TibiaAPI
+    C_GET_CHARLIST = 0x1,
+    C_LOGIN_CHAR = 0xA,
+    C_PING = 0x1E,
+
+    C_AUTO_WALK = 0x64,
+    C_AUTO_WALK_CANCEL = 0x69,
+    C_MOVE_NORTH = 0x65,
+    C_MOVE_EAST = 0x66,
+    C_MOVE_SOUTH = 0x67,
+    C_MOVE_WEST = 0x68,
+    C_MOVE_NE = 0x6A,
+    C_MOVE_SE = 0x6B,
+    C_MOVE_SW = 0x6C,
+    C_MOVE_NW = 0x6D,
+    C_TURN_NORTH = 0x6F,
+    C_TURN_EAST = 0x70,
+    C_TURN_SOUTH = 0x71,
+    C_TURN_WEST = 0x72,
+    C_MOVE_ITEM = 0x78,
+    C_SHOP_BUY = 0x7A,
+    C_SHOP_SELL = 0x7B,
+    C_SHOP_CLOSE = 0x7C,
+    C_ITEM_USE = 0x82,
+    C_ITEM_USE_ON = 0x83,
+    C_ITEM_USE_BATTLELIST = 0x84,
+    C_ITEM_ROTATE = 0x85,
+    C_CONTAINER_CLOSE = 0x87,
+    C_CONTAINER_OPEN_PARENT = 0x88,
+    C_LOOK_AT = 0x8C,
+    C_PLAYER_SPEECH = 0x96,
+    C_CHANNEL_LIST = 0x97,
+    C_CHANNEL_OPEN = 0x98,
+    C_CHANNEL_CLOSE = 0x99,
+    C_PRIVATE_CHANNEL_OPEN = 0x9A,
+    C_NPC_CHANNEL_CLOSE = 0x9E,
+    C_FIGHT_MODES = 0xA0,
+    C_ATTACK = 0xA1,
+    C_FOLLOW = 0xA2,
+    C_CANCEL_MOVE = 0xBE,
+    C_CONTAINER_UPDATE = 0xCA,
+    C_TILE_UPDATE = 0xC9,
+    C_VIP_ADD = 0xDC,
+    C_VIP_REMOVE = 0xDD,
+    C_SET_OUTFIT = 0xD3,
 };
 static const value_string from_client_packet_types[] = {
-    { CLIENT_GET_CHARLIST,      "Charlist request" },
-    { CLIENT_LOGIN_CHAR,        "Character login" },
-    { CLIENT_SPEAK,        "Speech" },
-    { CLIENT_PING,            "Pong" },
-    {CLIENT_MOVE_NORTH, "Move north"},
-    {CLIENT_MOVE_EAST, "Move east"},
-    {CLIENT_MOVE_SOUTH, "Move south"},
-    {CLIENT_MOVE_WEST, "Move west"},
-    {CLIENT_MOVE_NE, "Move north-east"},
-    {CLIENT_MOVE_SE, "Move south-east"},
-    {CLIENT_MOVE_SW, "Move south-west"},
-    {CLIENT_MOVE_NW, "Move north-west"},
-    {CLIENT_MOVE_ITEM, "Move item"},
+    { C_GET_CHARLIST,      "Charlist request" },
+    { C_LOGIN_CHAR,        "Character login" },
+    { C_PLAYER_SPEECH,        "Speech" },
+    { C_PING,            "Pong" },
+
+    { C_AUTO_WALK, "C_AUTO_WALK" },
+    { C_AUTO_WALK_CANCEL, "C_AUTO_WALK_CANCEL" },
+    {C_MOVE_NORTH, "Move north"},
+    {C_MOVE_EAST, "Move east"},
+    {C_MOVE_SOUTH, "Move south"},
+    {C_MOVE_WEST, "Move west"},
+    {C_MOVE_NE, "Move north-east"},
+    {C_MOVE_SE, "Move south-east"},
+    {C_MOVE_SW, "Move south-west"},
+    {C_MOVE_NW, "Move north-west"},
+
+    { C_TURN_NORTH, "Turn north" },
+    { C_TURN_EAST, "Turn east" },
+    { C_TURN_SOUTH, "Turn south" },
+    { C_TURN_WEST, "Turn west" },
+    { C_MOVE_ITEM, "move item" },
+    { C_SHOP_BUY, "C_SHOP_BUY" },
+    { C_SHOP_SELL, "C_SHOP_SELL" },
+    { C_SHOP_CLOSE, "C_SHOP_CLOSE" },
+    { C_ITEM_USE, "C_ITEM_USE" },
+    { C_ITEM_USE_ON, "C_ITEM_USE_ON" },
+    { C_ITEM_USE_BATTLELIST, "C_ITEM_USE_BATTLELIST" },
+    { C_ITEM_ROTATE, "C_ITEM_ROTATE" },
+    { C_CONTAINER_CLOSE, "C_CONTAINER_CLOSE" },
+    { C_CONTAINER_OPEN_PARENT, "C_CONTAINER_OPEN_PARENT" },
+    { C_LOOK_AT, "C_LOOK_AT" },
+    { C_PLAYER_SPEECH, "C_PLAYER_SPEECH" },
+    { C_CHANNEL_LIST, "C_CHANNEL_LIST" },
+    { C_CHANNEL_OPEN, "C_CHANNEL_OPEN" },
+    { C_CHANNEL_CLOSE, "C_CHANNEL_CLOSE" },
+    { C_PRIVATE_CHANNEL_OPEN, "C_PRIVATE_CHANNEL_OPEN" },
+    { C_NPC_CHANNEL_CLOSE, "C_NPC_CHANNEL_CLOSE" },
+    { C_FIGHT_MODES, "C_FIGHT_MODES" },
+    { C_ATTACK, "C_ATTACK" },
+    { C_FOLLOW, "C_FOLLOW" },
+    { C_CANCEL_MOVE, "C_CANCEL_MOVE" },
+    { C_CONTAINER_UPDATE, "C_CONTAINER_UPDATE" },
+    { C_TILE_UPDATE, "C_TILE_UPDATE" },
+    { C_VIP_ADD, "C_VIP_ADD" },
+    { C_VIP_REMOVE, "C_VIP_REMOVE" },
+    { C_SET_OUTFIT, "C_SET_OUTFIT" },
+
     { 0, NULL }
 };
 
@@ -271,27 +341,127 @@ static const value_string from_loginserv_packet_types[] = {
     { 0, NULL }
 };
 
-enum { GAMESERV_DLG_ERROR = 0x14, GAMESERV_PLAYER_CONDITION = 0xA2, GAMESERV_DLG_INFO = 0x15, GAMESERV_PING = 0x1E, GAMESERV_CREATURE_MOVE = 0x6D, GAMESERV_CREATURE_HEALTH = 0x8C, GAMESERV_MAGIC_EFFECT = 0x83, GAMESERV_SPEAK = 0xAA, GAMESERV_CHANNEL_OPEN = 0xAC};
+enum {
+
+    /* Credit to Khaos (OBJECT Networks) */
+    S_MAPINIT = 0x0A, /* Long playerCreatureId	Int unknownU16 (         Byte reportBugs?) */
+    S_GMACTIONS = 0x0B,	 /*	    	Byte unknown (32x)	*/
+    S_DLG_ERROR = 0x14,
+    S_DLG_INFO = 0x15,
+    S_TOOMANYPLAYERS = 0x16,	 /*	   	String errorMessage	*/
+    S_PING = 0x1E,
+    S_PLAYERLOC = 0x64,	 /*	 	Position pos	  	*/
+    S_MOVENORTH = 0x65,	 /*	 	MapDescription (18,1)	*/
+    S_MOVEEAST = 0x66,	 /*	   	MapDescription (1,14)	  	*/
+    S_MOVESOUTH = 0x67,	 /*	 	MapDescription (18,1)	*/
+    S_MOVEWEST = 0x68,	 /*	   	MapDescription (1,14)	  	*/
+    S_TILEUPDATE = 0x69,	 /*	 	Position pos TileDescription td	 	*/
+    S_ADDITEM = 0x6a,	 /*	   	Position pos ThingDescription thing	   	*/
+    S_REPLACEITEM = 0x6b,	 /*	 	Position pos	Byte stackpos ThingDescription thing	  	*/
+    S_REMOVEITEM = 0x6c,	 /*	   	Position pos Byte stackpos	   	*/
+    S_CREATURE_MOVE = 0x6D,
+    S_CONTAINER = 0x6e,	 /*	    Byte index	Short containerIcon	Byte slotCount ThingDescription item	  	 	*/
+    S_CONTAINERCLOSE = 0x6f	 ,	 /*	 	Byte index	*/
+    S_ADDITEMCONTAINER = 0x70	 ,	 /*	 	Byte index ThingDescription itm	 	*/
+    S_TRANSFORMITEMCONTAINER = 0x71	 ,	 /*	 	Byte index Byte slot	 */
+    S_REMOVEITEMCONTAINER = 0x72	,  /*	     Byte index Byte slot	     */
+    S_INVENTORYEMPTY = 0x78	  ,  /*	      Byte invSlot	    */
+    S_INVENTORYITEM = 0x79	 ,  /*	    Byte invSlot ThingDescription itm	     */
+    S_TRADEREQ = 0x7d	 ,  /*	    String otherperson Byte slotCount	ThingDescription itm	       */
+    S_TRADEACK = 0x7e,	 /*	   String otherperson Byte slotCount	ThingDescription itm	       */
+   	S_TRADECLOSE = 0x7f,
+    S_LIGHTLEVEL = 0x82	 ,  /*	    Byte lightlevel Byte lightcolor	     */
+    S_MAGIC_EFFECT = 0x83,
+    S_ANIMATEDTEXT = 0x84,	 /*	   Position pos Byte color String message	      */
+    S_DISTANCESHOT = 0x85	,  /*	     Position pos1	Byte stackposition	Position pos2	       */
+    S_CREATURESQUARE = 0x86	,  /*	      Long creatureid Byte squarecolor	     */
+    S_CREATURELIGHT = 0x8d	 ,  /*	     Long creatureid Byte ?	Byte ?	      */
+    S_CREATURE_HEALTH = 0x8C,
+    S_SETOUTFIT = 0x8e,	 /*	   Long creatureid Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType	// can extended look go here too?	         */
+    S_CREATURESPEED = 0x8f	  ,  /*	     YIKES! I didnt handle this!	    */
+    S_TEXTWINDOW = 0x96,	 /*	   Long windowId Byte icon	Byte maxlength String message	         */
+    S_STATUSMSG = 0xA0	  ,  /*	      Status status	   */
+    S_SKILLS = 0xA1,  /* Skills skills	*/
+    S_PLAYER_CONDITION = 0xA2,
+    S_CANCELATTACK = 0xA3,	 /*	  	    	*/
+    S_SPEAK = 0xAA,
+    S_CHANNELSDIALOG = 0xAB,	 /*	 	Byte channelCount	(Int channelId	String channelName)	  	*/
+    S_CHANNEL_OPEN = 0xAC,
+    S_OPENPRIV = 0xAD,	 /*	   	String playerName	  	*/
+    S_TEXTMESSAGE = 0xB4,	 /*	 	Byte msgClass String string	 	*/
+    S_CANCELWALK = 0xB5,	 /*	   	Byte direction	  	*/
+    S_FLOORUP = 0xBE,	 /*	  Advanced topic; read separate text	*/
+    S_FLOORDOWN = 0xBF,	 /*	  	  Advanced topic; read separate text	  	*/
+    S_OUTFITLIST = 0xC8,	 /*	 	Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType Byte firstModel Byte lastModel	      	*/
+    S_VIPADD = 0xD2,	 /*	   	Long guid String name Byte isOnline	  	*/
+    S_VIPLOGIN = 0xD3,	 /*	   	Long guid	*/
+    S_VIPLOGOUT = 0xD4,	 /*	   	Long guid*/
+};
 static const value_string from_gameserv_packet_types[] = {
-    { GAMESERV_PING,            "Ping" },
-    { GAMESERV_DLG_ERROR,       "Error" },
-    { GAMESERV_DLG_INFO,        "Info"},
-    { GAMESERV_CREATURE_MOVE,        "Creature move"},
-    { GAMESERV_PLAYER_CONDITION,        "Player condition"},
-    { GAMESERV_CREATURE_HEALTH,        "Creature Health"},
-    { GAMESERV_MAGIC_EFFECT,        "Magic effect"},
-    { GAMESERV_CHANNEL_OPEN,        "Channel open"},
-    { GAMESERV_SPEAK,        "Creature speech"},
+
+    {S_MAPINIT, "S_MAPINIT"},
+    {S_GMACTIONS, "S_GMACTIONS"},
+    {S_DLG_ERROR,       "Error" },
+    {S_DLG_INFO,        "Info"},
+    {S_TOOMANYPLAYERS, "S_TOOMANYPLAYERS"},
+    {S_PING,       "Ping" },
+    {S_PLAYERLOC, "S_PLAYERLOC"},
+    {S_MOVENORTH, "S_MOVENORTH"},
+    {S_MOVEEAST, "S_MOVEEAST"},
+    {S_MOVESOUTH, "S_MOVESOUTH"},
+    {S_MOVEWEST, "S_MOVEWEST"},
+    {S_TILEUPDATE, "S_TILEUPDATE"},
+    {S_ADDITEM, "S_ADDITEM"},
+    {S_REPLACEITEM, "S_REPLACEITEM"},
+    {S_REMOVEITEM, "S_REMOVEITEM"},
+    {S_CREATURE_MOVE,        "Creature move"},
+    {S_CONTAINER, "S_CONTAINER"},
+    {S_CONTAINERCLOSE, "S_CONTAINERCLOSE"},
+    {S_ADDITEMCONTAINER, "S_ADDITEMCONTAINER"},
+    {S_TRANSFORMITEMCONTAINER, "S_TRANSFORMITEMCONTAINER"},
+    {S_REMOVEITEMCONTAINER, "S_REMOVEITEMCONTAINER"},
+    {S_INVENTORYEMPTY, "S_INVENTORYEMPTY"},
+    {S_INVENTORYITEM, "S_INVENTORYITEM"},
+    {S_TRADEREQ, "S_TRADEREQ"},
+    {S_TRADEACK, "S_TRADEACK"},
+    {S_TRADECLOSE, "S_TRADECLOSE"},
+    {S_LIGHTLEVEL, "S_LIGHTLEVEL"},
+    {S_MAGIC_EFFECT,        "Magic effect"},
+    {S_ANIMATEDTEXT, "S_ANIMATEDTEXT"},
+    {S_DISTANCESHOT, "S_DISTANCESHOT"},
+    {S_CREATURESQUARE, "S_CREATURESQUARE"},
+    {S_CREATURELIGHT, "S_CREATURELIGHT"},
+    {S_CREATURE_HEALTH,        "Creature Health"},
+    {S_SETOUTFIT, "S_SETOUTFIT"},
+    {S_CREATURESPEED, "S_CREATURESPEED"},
+    {S_TEXTWINDOW, "S_TEXTWINDOW"},
+    {S_STATUSMSG, "S_STATUSMSG"},
+    {S_SKILLS, "S_SKILLS"},
+    {S_PLAYER_CONDITION,        "Player condition"},
+    {S_CANCELATTACK, "S_CANCELATTACK"},
+    {S_SPEAK,        "Creature speech"},
+    {S_CHANNELSDIALOG, "S_CHANNELSDIALOG"},
+    {S_CHANNEL_OPEN,        "Channel open"},
+    {S_OPENPRIV, "S_OPENPRIV"},
+    {S_TEXTMESSAGE, "S_TEXTMESSAGE"},
+    {S_CANCELWALK, "S_CANCELWALK"},
+    {S_FLOORUP, "S_FLOORUP"},
+    {S_FLOORDOWN, "S_FLOORDOWN"},
+    {S_OUTFITLIST, "S_OUTFITLIST"},
+    {S_VIPADD, "S_VIPADD"},
+    {S_VIPLOGIN, "S_VIPLOGIN"},
+    {S_VIPLOGOUT, "S_VIPLOGOUT"},
+
     { 0, NULL }
 };
 
 static guint16 version_from_charlist_request_packet(const guint8 *buf, size_t len) {
     /* credits go to tulio150 on tpforums.org */
     switch (len) {
-        case 149: return 830 * (buf[6] == CLIENT_GET_CHARLIST);
-        case 145: return 761 * (buf[2] == CLIENT_GET_CHARLIST);
+        case 149: return 830 * (buf[6] == C_GET_CHARLIST);
+        case 145: return 761 * (buf[2] == C_GET_CHARLIST);
         default:
-        if (23 <= len && len <= 52) return 700 * (buf[2] == CLIENT_GET_CHARLIST);
+        if (23 <= len && len <= 52) return 700 * (buf[2] == C_GET_CHARLIST);
     }
     return 0;
 }
@@ -299,10 +469,10 @@ static guint16 version_from_charlist_request_packet(const guint8 *buf, size_t le
 static guint16 version_from_game_login_packet(const guint8 *buf, size_t len) {
     /* credits go to tulio150 on tpforums.org */
     switch (len) {
-        case 137: return 830 * (buf[6] == CLIENT_LOGIN_CHAR);
-        case 133: return 761 * (buf[2] == CLIENT_LOGIN_CHAR);
+        case 137: return 830 * (buf[6] == C_LOGIN_CHAR);
+        case 133: return 761 * (buf[2] == C_LOGIN_CHAR);
         default:
-        if (23 <= len && len <= 52) return 700 * (buf[2] == CLIENT_GET_CHARLIST);
+        if (23 <= len && len <= 52) return 700 * (buf[2] == C_GET_CHARLIST);
     }
     return 0;
 }
@@ -315,8 +485,8 @@ static int
 dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown)
 {
     struct tibia_convo *convo;
-    enum {GET_CHARLIST, CHAR_LOGIN, PING, MAP_PACKET, GAME_PACKET } kind = GAME_PACKET; 
-    static char *kinds[] = {"GET_CHARLIST", "CHAR_LOGIN", "PING", "MAP_PACKET", "GAME_PACKET"};
+    enum {GET_CHARLIST, CHAR_LOGIN, PING, MAS_PACKET, GAME_PACKET } kind = GAME_PACKET; 
+    static char *kinds[] = {"GET_CHARLIST", "CHAR_LOGIN", "PING", "MAS_PACKET", "GAME_PACKET"};
     tvbuff_t *tvb_decrypted;
     int offset = 0, len = 0;
     proto_tree *mytree = NULL, *subtree = NULL;
@@ -621,17 +791,17 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
 
     while (offset < len) { switch (cmd = tvb_get_guint8(tvb, offset))
         {
-            case GAMESERV_DLG_ERROR:
-            case GAMESERV_DLG_INFO:
+            case S_DLG_ERROR:
+            case S_DLG_INFO:
                 clen = tvb_get_guint16(tvb, offset+1, ENC_LITTLE_ENDIAN) + 2;
                 cmdtree = proto_item_add_subtree(cmdti, ett_command);
                 proto_tree_add_item(cmdtree, hf_gameserv_command, tvb, offset, 1, ENC_LITTLE_ENDIAN);
                 proto_item_set_len(cmdti, clen+2);
                 offset++;
-                proto_tree_add_item(cmdtree, cmd == GAMESERV_DLG_ERROR ? hf_dlg_error : hf_dlg_info, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
+                proto_tree_add_item(cmdtree, cmd == S_DLG_ERROR ? hf_dlg_error : hf_dlg_info, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
                 offset += clen;
                 break;
-            case GAMESERV_CHANNEL_OPEN:
+            case S_CHANNEL_OPEN:
                 clen = tvb_get_guint16(tvb, offset+3, ENC_LITTLE_ENDIAN) + 2;
                 cmdtree = proto_item_add_subtree(cmdti, ett_command);
                 proto_tree_add_item(cmdtree, hf_gameserv_command, tvb, offset, 1, ENC_LITTLE_ENDIAN);
@@ -642,7 +812,7 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
                 proto_tree_add_item(cmdtree, hf_channel_name, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
                 offset += clen;
                 break;
-            case GAMESERV_PLAYER_CONDITION:
+            case S_PLAYER_CONDITION:
                 cmdtree = proto_item_add_subtree(cmdti, ett_command);
                 proto_tree_add_item(cmdtree, hf_gameserv_command, tvb, offset, 1, ENC_LITTLE_ENDIAN);
                 proto_item_set_len(cmdti, 4);
@@ -662,7 +832,7 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
                 proto_tree_add_item(cmdtree, hf_char_flag_cursed, tvb, offset, 3, ENC_BIG_ENDIAN);
                 offset += 3;
                 break;
-            case GAMESERV_PING:
+            case S_PING:
                 cmdtree = proto_item_add_subtree(cmdti, ett_command);
                 proto_tree_add_item(cmdtree, hf_gameserv_command, tvb, offset, 1, ENC_LITTLE_ENDIAN);
                 proto_item_set_len(cmdti, 1);
@@ -717,8 +887,8 @@ static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb,
 
     while (offset < len) { switch (cmd = tvb_get_guint8(tvb, offset))
         {
-            /*case CLIENT_MOVE_ITEM:*/
-            case CLIENT_SPEAK:
+            /*case C_MOVE_ITEM:*/
+            case C_PLAYER_SPEECH:
                 clen = tvb_get_guint16(tvb, offset+2, ENC_LITTLE_ENDIAN) + 2;
                 CREATE_CMD_SUBTREE(hf_client_command, clen+2);
                 offset++;
@@ -727,7 +897,7 @@ static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb,
                 proto_tree_add_item(cmdtree, hf_chat_msg, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
                 offset += clen;
                 break;
-            case GAMESERV_PING:
+            case S_PING:
                 CREATE_CMD_SUBTREE(hf_client_command, 1);
                 offset++;
                 break;
