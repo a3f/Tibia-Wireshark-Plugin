@@ -1,7 +1,7 @@
 /* packet-tibia.c
  * Routines for Tibia game protocol dissection
  * By Ahmad Fatoum <ahmad@a3f.at>
- * Copyright 2016 Ahmad Fatoum
+ * Copyright 2017 Ahmad Fatoum
  *
  * $Id$
  *
@@ -25,11 +25,8 @@
  */
 
 #define USE_PORTS
-
-/*#ifdef HAVE_CONFIG_H*/
-#if 1
+ 
 #include "config.h"
-#endif
 
 #include <zlib.h>
 #include <glib.h>
@@ -52,13 +49,6 @@ struct rsadecrypt_assoc {
     char* password;
 };
 
-
-#define DEBUG
-#ifdef DEBUG
-#define TRACE(arg) write(1, (arg), sizeof(arg))
-#else
-#define TRACE
-#endif
 
 #ifndef _U_
 #define _U_ __attribute__((unused))
@@ -84,28 +74,6 @@ static int decode_xtea = 1;
 #include "xtea.h"
 #ifdef HAVE_LIBGCRYPT
 static int decode_rsa = 1;
-#include <gcrypt.h>
-#include "rsa.h"
-
-static rsa_t otserv[1];
-static guint8
-otserv_n[] = {
-#include "otserv_keys/n.h"
-},
-    otserv_e[] = { /* 65537 */
-#include "otserv_keys/e.h"
-    },
-#if 0
-    otserv_p[] = {
-#include "otserv_keys/p.h"
-    },
-    otserv_q[] = {
-#include "otserv_keys/q.h"
-    },
-#endif
-    otserv_d[] = {
-#include "otserv_keys/d.h"
-    };
 #endif
 
 #define LOGIN_FLAG_GM 0x01
@@ -244,7 +212,7 @@ static struct tibia_convo *tibia_get_convo(packet_info *pinfo)
 }
 
 enum {
-    // from TibiaAPI
+    /* from TibiaAPI */
     C_GET_CHARLIST = 0x1,
     C_LOGIN_CHAR = 0xA,
     C_PING = 0x1E,
@@ -288,7 +256,7 @@ enum {
     C_TILE_UPDATE = 0xC9,
     C_VIP_ADD = 0xDC,
     C_VIP_REMOVE = 0xDD,
-    C_SET_OUTFIT = 0xD3,
+    C_SET_OUTFIT = 0xD3
 };
 static const value_string from_client_packet_types[] = {
     { C_GET_CHARLIST,      "Charlist request" },
@@ -403,7 +371,7 @@ enum {
     S_OUTFITLIST = 0xC8,	 /*	 	Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType Byte firstModel Byte lastModel	      	*/
     S_VIPADD = 0xD2,	 /*	   	Long guid String name Byte isOnline	  	*/
     S_VIPLOGIN = 0xD3,	 /*	   	Long guid	*/
-    S_VIPLOGOUT = 0xD4,	 /*	   	Long guid*/
+    S_VIPLOGOUT = 0xD4	 /*	   	Long guid*/
 };
 static const value_string from_gameserv_packet_types[] = {
 
@@ -634,15 +602,17 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
             /* assume OTServ communication */
             /* (TODO: if it fails, mark TCP communication as non-OTServ (or nah it's just once) */
             {
-                guint16 rsa_len = tvb_captured_length_remaining(tvb, offset);
+                guint rsa_len = tvb_captured_length_remaining(tvb, offset);
                 /* FIXME USE WS_MALLOC */
-                /*guint8 *decrypted_buffer = (guint8*)wmem_alloc(wmem_packet_scope(), rsa_len);*/
-                guint8 *decrypted_buffer = (guint8*)g_malloc(rsa_len);
+                guint8 *decrypted_buffer = NULL;
 
-                 /*TODO: check if failure*/
-                rsa_private_decrypt(otserv, tvb_get_ptr(tvb, offset, -1), rsa_len, decrypted_buffer);
+                 /*TODO: check if failure , FIXME: remove tvb_get_ptr*/
+                if (!rsa_decrypt(NULL, tvb_get_ptr(tvb, offset, -1), &rsa_len, &decrypted_buffer)) {
+                    printf("FAIL!\n");
+                    return -1;
+                }
                 tvb_decrypted = tvb_new_child_real_data(tvb, decrypted_buffer, rsa_len, rsa_len);
-                tvb_set_free_cb(tvb_decrypted, g_free);
+                tvb_set_free_cb(tvb_decrypted, gcry_free);
                 add_new_data_source(pinfo, tvb_decrypted, "Decrypted Login Data");
             }
             offset = 0;
@@ -1304,10 +1274,10 @@ proto_register_tibia(void)
         &ett_file_versions,
         &ett_charlist,
     };
-    TRACE("initializing Tibia " __DATE__ " " __TIME__ "\n");
+    puts("initializing Tibia " __DATE__ " " __TIME__ "\n");
     proto_tibia = proto_register_protocol (
             "Tibia Protocol", /* name   */
-            "1Tibia",      /* short name */
+            "1Tibia",      /* FIXME:short name */
             "tibia"       /* abbrev     */
             );
     proto_register_field_array(proto_tibia, hf, array_length(hf));
@@ -1336,17 +1306,7 @@ proto_register_tibia(void)
 
     {
 #ifdef HAVE_LIBGCRYPT
-        struct rsa_params otserv_params = {0,0,0,0,0,0};
-        otserv_params.n = otserv_n;
-        otserv_params.e = otserv_e;
-        otserv_params.d = otserv_d;
-        /*otserv_params.p = otserv_p;*/
-        /*otserv_params.q = otserv_q;*/
-        /*otserv_params.u = otserv_u;*/
-
-        rsa_init(otserv);
-        rsa_set_bin_key(otserv, &otserv_params);
-
+        rsa_init();
 #endif
     }
 }

@@ -31,7 +31,7 @@ NONGENERATED_REGISTER_C_FILES = \
 # Non-generated sources
 NONGENERATED_C_FILES = \
 	$(NONGENERATED_REGISTER_C_FILES) \
-	tinc-rsa.c \
+	rsa.c \
 	xtea.c
 
 # Headers.

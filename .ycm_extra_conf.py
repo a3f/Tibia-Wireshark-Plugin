@@ -26,12 +26,15 @@ flags = [
     '-DHAVE_CONFIG_H',
     '-DHAVE_LIBGCRYPT',
     '-isystem', '/usr/local/include',
-    '-isystem', '/usr/local/include/glib-2.0/glib',
-    '-isystem', '/usr/local/include/glib-2.0',
-    '-isystem', '/usr/local/Cellar/glib/2.50.0/lib/glib-2.0/include',
-    '-isystem', '/Users/a3f/prjs/wireshark-tibia-dissector/wireshark',
+    '-isystem', '/Users/a3f/pse/wireshark',
+    '-isystem', '/Users/a3f/pse/wireshark/build',
+    '-isystem', '/opt/local/include/glib-2.0',
+    '-isystem', '/opt/local/include/glib-2.0/glib',
+    '-isystem', '/usr/local/Cellar/glib/2.50.3/lib/glib-2.0/include',
+    '-isystem', '/opt/local/include/glib-2.0',
 
-    '-isystem', '/usr/local/include/eigen3',
+    '-Wc++98-compat', '-Wc++98-compat-pedantic',
+
     '-I', 'include'
     '-I', '../include'
     '-I.'

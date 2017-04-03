@@ -26,7 +26,7 @@ set_module_info(tibia 0 0 3 0)
 
 set(DISSECTOR_SRC
     packet-tibia.c
-    tinc-rsa.c
+    rsa.c
     xtea.c
 )
 
