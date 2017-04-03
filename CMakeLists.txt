@@ -22,40 +22,65 @@
 include(WiresharkPlugin)
 
 # Plugin name and version info (major minor micro extra)
-set_module_info(tibia 0 0 2 0)
+set_module_info(tibia 0 0 3 0)
 
 set(DISSECTOR_SRC
-	packet-tibia.c
+    packet-tibia.c
+    tinc-rsa.c
+    xtea.c
 )
 
 set(PLUGIN_FILES
-	plugin.c
-	${DISSECTOR_SRC}
+    plugin.c
+    ${DISSECTOR_SRC}
 )
 
 set(CLEAN_FILES
-	${PLUGIN_FILES}
+    ${PLUGIN_FILES}
 )
 
 if (WERROR_COMMON_FLAGS)
-	set_source_files_properties(
-		${CLEAN_FILES}
-		PROPERTIES
-		COMPILE_FLAGS ${WERROR_COMMON_FLAGS}
-	)
+    set_source_files_properties(
+        ${CLEAN_FILES}
+        PROPERTIES
+        COMPILE_FLAGS ${WERROR_COMMON_FLAGS}
+)
 endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 register_dissector_files(plugin.c
-	plugin
-	${DISSECTOR_SRC}
+    plugin
+    ${DISSECTOR_SRC}
 )
 
 add_plugin_library(tibia)
 
 install(TARGETS tibia
-	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION} NAMELINK_SKIP
-	RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION}
-	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION} NAMELINK_SKIP
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${CPACK_PACKAGE_NAME}/plugins/${CPACK_PACKAGE_VERSION}
 )
+file(GLOB DISSECTOR_HEADERS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.h")
+CHECKAPI(
+    NAME
+    tibia
+    SWITCHES
+    -g abort -g termoutput -build
+    SOURCES
+    ${DISSECTOR_SRC}
+    ${DISSECTOR_HEADERS}
+)
+
+#
+# Editor modelines  -  https://www.wireshark.org/tools/modelines.html
+#
+# Local variables:
+# c-basic-offset: 4
+# tab-width: 4
+# indent-tabs-mode: nil
+# End:
+#
+# vi: set shiftwidth=4 tabstop=4 expandtab:
+# :indentSize=4:tabSize=4:noTabs=true:
+#

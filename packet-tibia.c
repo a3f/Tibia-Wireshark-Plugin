@@ -26,7 +26,8 @@
 
 #define USE_PORTS
 
-#ifdef HAVE_CONFIG_H
+/*#ifdef HAVE_CONFIG_H*/
+#if 1
 #include "config.h"
 #endif
 
@@ -39,6 +40,8 @@
 #include <epan/value_string.h>
 #include <wsutil/filesystem.h>
 #include <wsutil/file_util.h>
+
+#include "rsa.h"
 
 /* User Access Table */
 struct rsadecrypt_assoc {
@@ -57,6 +60,9 @@ struct rsadecrypt_assoc {
 #define TRACE
 #endif
 
+#ifndef _U_
+#define _U_ __attribute__((unused))
+#endif
 
 static void* rsadecrypt_copy_cb(void *dst_, const void *src_, size_t len _U_);
 static void rsadecrypt_free_cb(void *r);
