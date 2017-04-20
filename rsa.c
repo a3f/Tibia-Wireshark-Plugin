@@ -30,7 +30,7 @@
 
 
 static gcry_sexp_t otserv_key;
-void rsa_init(void) {
+void old_rsa_init(void) {
     const char sexp[] = 
     "(private-key (rsa"
     "(n #9b646903b45b07ac956568d87353bd7165139dd7940703b03e6dd079399661b4a837aa60561d7ccb9452fa0080594909882ab5bca58a1a1b35f8b1059b72b1212611c6152ad3dbb3cfbee7adc142a75d3d75971509c321c5c24a5bd51fd460f01b4e15beb0de1930528a5d3f15c1e3cbf5c401d6777e10acaab33dbe8d5b7ff5#)"
@@ -48,37 +48,50 @@ void rsa_init(void) {
     }
 }
 
-void rsa_free(void) {
+void old_rsa_free(void) {
     gcry_sexp_release(otserv_key);
 }
 
-int rsa_decrypt(gcry_sexp_t key, const guchar *in, guint *len, guchar **out) {
-    gcry_error_t err;
+int pcry_private_decrypt2(const guint len, guchar *in, gcry_sexp_t key, char **err)
+{
+    gcry_error_t gerr;
     gcry_sexp_t payload, plain;
-    size_t size_t_len;
+    const char *buf;
+    size_t i, actual_size;
+    *err = "shit";
 
     if (key == NULL)
         key = otserv_key;
 
-    err = gcry_sexp_build(&payload, NULL, "(enc-val (rsa (a %b)))", (int)*len, in);
-    if (err) {
+    gerr = gcry_sexp_build(&payload, NULL, "(enc-val (rsa (a %b)))", (int)len, in);
+    if (gerr) {
         //FIXME: Use expert info
-        printf("%s:%d: %s@%s\n", __FILE__, __LINE__, gcry_strerror(err), gcry_strsource(err));
+        printf("%s:%d: %s@%s\n", __FILE__, __LINE__, gcry_strerror(gerr), gcry_strsource(gerr));
         return 0;
     }
 
-    err = gcry_pk_decrypt(&plain, payload, key);
+    gerr = gcry_pk_decrypt(&plain, payload, key);
     gcry_sexp_release(payload);
-    if (err) {
-        printf("%s:%d: %s@%s\n", __FILE__, __LINE__, gcry_strerror(err), gcry_strsource(err));
+    if (gerr) {
+        printf("%s:%d: %s@%s\n", __FILE__, __LINE__, gcry_strerror(gerr), gcry_strsource(gerr));
         return 0;
     }
 
-    *out = gcry_sexp_nth_buffer(plain, 0, &size_t_len);
+    if (!(buf = gcry_sexp_nth_data(plain, 0, &actual_size)))
+    { /* handle properly */
+        return 0;
+    }
+
+    (void)i;
+#if 0
+    for (i = 0; i < len - actual_size; i++)
+        ret[i] = 0x00;
+#endif
+
+    memcpy(in, buf, actual_size);
+
     gcry_sexp_release(plain);
 
-    *len = (guint)size_t_len;
-
-	return 1;
+	return (guint)actual_size;
 }
 

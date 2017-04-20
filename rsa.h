@@ -31,7 +31,7 @@
 #include <gcrypt.h>
 #include <glib.h>
 
-int rsa_decrypt(gcry_sexp_t key, const guchar *in, guint *len, guchar **out);
+int pcry_private_decrypt2(const guint len, guchar* data, gcry_sexp_t pk, char **err);
 
 extern void rsa_init(void);
 extern void rsa_free(void);

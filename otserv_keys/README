@@ -1,2 +1,0 @@
-Note that OpenSSL assumes p > q, GCrypt on the other hand q > p.
-Each big integer has a 2 byte big-endian prefix that specifies byte length

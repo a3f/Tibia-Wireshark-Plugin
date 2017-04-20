@@ -1,4 +1,0 @@
-#ifndef NO_PREFIX_LEN
-0, 3,
-#endif
-0x01, 0x00, 0x01

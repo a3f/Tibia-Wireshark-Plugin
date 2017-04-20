@@ -30,7 +30,7 @@ flags = [
     '-isystem', '/Users/a3f/pse/wireshark/build',
     '-isystem', '/opt/local/include/glib-2.0',
     '-isystem', '/opt/local/include/glib-2.0/glib',
-    '-isystem', '/usr/local/Cellar/glib/2.50.3/lib/glib-2.0/include',
+    '-isystem', '/usr/local/Cellar/glib/2.52.0/lib/glib-2.0/include',
     '-isystem', '/opt/local/include/glib-2.0',
 
     '-Wc++98-compat', '-Wc++98-compat-pedantic',
