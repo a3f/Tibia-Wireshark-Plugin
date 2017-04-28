@@ -26,8 +26,6 @@ set_module_info(tibia 0 0 3 0)
 
 set(DISSECTOR_SRC
     packet-tibia.c
-    rsa.c
-    xtea.c
 )
 
 set(PLUGIN_FILES
