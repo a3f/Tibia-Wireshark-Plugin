@@ -23,26 +23,32 @@
 
 
 /* Tibia (https://tibia.com) is a Massively Multiplayer Online Role-Playing
- * Game by Cipsoft GmbH.
+ * Game (MMORPG) by Cipsoft GmbH.
  *
- * It's transported over TCP, with recent versions encrypting player
- * interaction with XTEA. Authentication and key exchange is done with
- * a hard-coded RSA key in the client.
- * This dissector supports Tibia versions from 7.1 (2003) till current
- * 11.02 (2017-05-01). Tibia has an active open source server emulater
- * community (OTServ) that still makes use of old current versions and
- * surpasses the official servers in number of available servers and
- * total player number, therefore computability with older protocol
- * iterations is maintained.
- * 
+ * Transport is over TCP, with recent versions encrypting player interaction
+ * with XTEA. Authentication and key exchange is done with a hard-coded
+ * RSA key in the client.
+ *
+ * Three official clients exist: The current Qt-based 11.0+ client,
+ * the old C++ client used from Tibia 7.0 till 10.99 and the Flash client.
+ * The latter two are being phased out. They use the same protocol,
+ * except for different key exchange in the Flash client. The flash client is
+ * not supported by this dissector.
+ *
+ * The dissector supports Tibia versions from 7.0 (2002) till current
+ * 11.30 (2017-05-01). Tibia has an active open source server emulater
+ * community (OTServ) that still makes use of older versions and surpasses
+ * the official servers in popularity, therefore compatability with older
+ * protocol iterations should be maintained.
+ *
  * The RSA private key usually used by OTServ is hard-coded in. Server
  * admins may add their own private key in PEM or PKCS#12 format over
  * the UAT. For servers where the private key is indeed private (like
- * for official servers), the symmetric XTEA key may be provided
- * to the dissector via UAT.
- * 
- * 
- * Tibia is a registered trademark by Cipsoft GmbH.
+ * for official servers), the symmetric XTEA key (retrievable by memory
+ * peeking or MitM) may be provided to the dissector via UAT.
+ *
+ *
+ * Tibia is a registered trademark of Cipsoft GmbH.
  */
 
 #include "config.h"
@@ -53,6 +59,7 @@
 #include <epan/uat.h>
 #include <epan/conversation.h>
 #include <epan/value_string.h>
+#include <epan/expert.h>
 #include <epan/address.h>
 #include <wsutil/filesystem.h>
 #include <wsutil/file_util.h>
@@ -63,12 +70,15 @@
 #include <wsutil/rsa.h>
 #include <errno.h>
 
-static gboolean try_otserv_key = TRUE;
+static gboolean try_otserv_key = TRUE,
+                show_char_info = TRUE,
+                show_xtea_key  = FALSE;
 
 /* User Access Tables */
 struct rsakeys_assoc {
     char *ipaddr;
     char *port;
+
     char *keyfile;
     char *password;
 };
@@ -103,8 +113,6 @@ UAT_DEC_CB_DEF(xteakeylist_uats, framenum, struct xteakeys_assoc)
 UAT_CSTRING_CB_DEF(xteakeylist_uats, key, struct xteakeys_assoc)
 
 
-static int decode_xtea = 1; /* FIXME remove this */
-
 #define LOGIN_FLAG_GM 0x01
 
 #define CHAR_FLAG_POISON     0x1
@@ -126,11 +134,7 @@ static int decode_xtea = 1; /* FIXME remove this */
  * game servers on the same IP address
  */
 
-static range_t ports = {
-    1, {
-        { 7171, 7172 }
-    }
-};
+static range_t ports = { 1, {{ 7171, 7172 }} };
 
 static gint proto_tibia = -1;
 static uat_t *rsakeys_uat = NULL, *xteakeys_uat = NULL;
@@ -168,7 +172,7 @@ static gint hf_client_gpu;
 static gint hf_client_vram;
 static gint hf_client_resolution;
 
-static gint hf_xtea_len = -1;
+static gint hf_payload_len = -1;
 static gint hf_loginserv_command = -1;
 static gint hf_gameserv_command = -1;
 static gint hf_client_command = -1;
@@ -208,6 +212,8 @@ static gint ett_file_versions = -1;
 static gint ett_client_info = -1;
 static gint ett_charlist= -1;
 
+static expert_field ei_xtea_len_toobig = EI_INIT;
+
 struct rsakey {
     address addr;
     guint16 port;
@@ -219,14 +225,15 @@ GHashTable *rsakeys, *xteakeys;
 #define CONVO_ACTIVE            0x01
 #define CONVO_PROTO_HAS_ADLER32 0x02
 #define CONVO_PROTO_HAS_XTEA    0x04
-#define CONVO_KNOWS_XTEA        0x08
 #define CONVO_LOGINSERV         0x10
 #define CONVO_PROTO_HAS_RSA     0x20
 #define CONVO_PROTO_HAS_ACCNAME 0x40
 #define CONVO_PROTO_HAS_HWINFO  0x80
 #define CONVO_PROTO_HAS_GMBYTE  0x100
 
-static unsigned version_get_flags(guint16 version) {
+static unsigned
+version_get_flags(guint16 version)
+{
     unsigned flags = 0;
     flags |= CONVO_PROTO_HAS_GMBYTE;
 
@@ -242,6 +249,7 @@ static unsigned version_get_flags(guint16 version) {
 struct tibia_convo {
     guint16 version;
     guint32 xtea_key[XTEA_KEY_LEN / sizeof (guint32)];
+    guint32 xtea_framenum;
     char *acc, *pass, *char_name;
     unsigned flags;
     guint16 clientport;
@@ -250,11 +258,14 @@ struct tibia_convo {
     gcry_sexp_t privkey;
 };
 
+#define XTEA_FROM_UAT 0
+#define XTEA_UNKNOWN  0xFFFFFFFF
+
 static struct tibia_convo *
 tibia_get_convo(packet_info *pinfo)
 {
     struct tibia_convo *convo;
-    conversation_t * epan_conversation = find_or_create_conversation(pinfo);
+    conversation_t *epan_conversation = find_or_create_conversation(pinfo);
 
     convo = (struct tibia_convo*)conversation_get_proto_data(epan_conversation, proto_tibia);
 
@@ -280,15 +291,16 @@ tibia_get_convo(packet_info *pinfo)
         rsa_key.port = convo->servport;
         convo->privkey = g_hash_table_lookup(rsakeys, &rsa_key);
         convo->flags = 0;
+        convo->xtea_framenum = XTEA_UNKNOWN;
 
         conversation_add_proto_data(epan_conversation, proto_tibia, (void *)convo);
     }
 
-    if (!(convo->flags & CONVO_KNOWS_XTEA)) {
+    if (convo->xtea_framenum == XTEA_UNKNOWN) {
         guint8 *xtea_key = g_hash_table_lookup(xteakeys, GUINT_TO_POINTER(pinfo->num));
         if (xtea_key) {
             memcpy(convo->xtea_key, xtea_key, XTEA_KEY_LEN);
-            convo->flags |= CONVO_KNOWS_XTEA;
+            convo->xtea_framenum = XTEA_FROM_UAT;
         }
     }
 
@@ -306,16 +318,17 @@ convo_get_privkey(struct tibia_convo *convo)
 
 enum {
     /* from TibiaAPI */
-    C_GET_CHARLIST          = 0x1,
-    C_LOGIN_CHAR            = 0xA,
+    C_GET_CHARLIST          = 0x01,
+    C_LOGIN_CHAR            = 0x0A,
     C_PING                  = 0x1E,
 
+    C_LOGOUT                = 0x14,
     C_AUTO_WALK             = 0x64,
-    C_AUTO_WALK_CANCEL      = 0x69,
     C_GO_NORTH              = 0x65,
     C_GO_EAST               = 0x66,
     C_GO_SOUTH              = 0x67,
     C_GO_WEST               = 0x68,
+    C_AUTO_WALK_CANCEL      = 0x69,
     C_GO_NE                 = 0x6A,
     C_GO_SE                 = 0x6B,
     C_GO_SW                 = 0x6C,
@@ -345,11 +358,11 @@ enum {
     C_ATTACK                = 0xA1,
     C_FOLLOW                = 0xA2,
     C_CANCEL_GO             = 0xBE,
-    C_CONTAINER_UPDATE      = 0xCA,
     C_TILE_UPDATE           = 0xC9,
+    C_CONTAINER_UPDATE      = 0xCA,
+    C_SET_OUTFIT            = 0xD3,
     C_VIP_ADD               = 0xDC,
-    C_VIP_REMOVE            = 0xDD,
-    C_SET_OUTFIT            = 0xD3
+    C_VIP_REMOVE            = 0xDD
 };
 static const value_string from_client_packet_types[] = {
     { C_GET_CHARLIST,     "Charlist request" },
@@ -412,61 +425,60 @@ static const value_string from_loginserv_packet_types[] = {
 };
 
 enum {
-
     /* Credit to Khaos (OBJECT Networks) */
-    S_MAPINIT = 0x0A,        /* Long playerCreatureId  Int unknownU16 (Byte reportBugs?) */
-    S_GMACTIONS = 0x0B,      /* Used to be 32 unknown bytes, but with GMs removed it might
-                                not be in use anymore */
-    S_DLG_ERROR = 0x14,      /* String errorMessage */
-    S_DLG_INFO = 0x15,
-    S_TOOMANYPLAYERS = 0x16,
-    S_PING = 0x1E,
-    S_PLAYERLOC = 0x64,      /* Position pos */
-    S_GONORTH = 0x65,      /* MapDescription (18,1) */
-    S_GOEAST = 0x66,       /* MapDescription (1,14) */
-    S_GOSOUTH = 0x67,      /* MapDescription (18,1) */
-    S_GOWEST = 0x68,       /* MapDescription (1,14) */
-    S_TILEUPDATE = 0x69,     /* Position pos TileDescription td */
-    S_ADDITEM = 0x6a,        /* Position pos ThingDescription thing */
-    S_REPLACEITEM = 0x6b,    /* Position pos  Byte stackpos ThingDescription thing */
-    S_REMOVEITEM = 0x6c,     /* Position pos Byte stackpos */
-    S_CREATURE_GO = 0x6D,
-    S_CONTAINER = 0x6e,      /* Byte index  Short containerIcon  Byte slotCount ThingDescription item */
-    S_CONTAINERCLOSE = 0x6f ,           /* Byte index */
-    S_ADDITEMCONTAINER = 0x70 ,         /* Byte index ThingDescription itm */
-    S_TRANSFORMITEMCONTAINER = 0x71 ,   /* Byte index Byte slot */
-    S_REMOVEITEMCONTAINER = 0x72,       /* Byte index Byte slot */
-    S_INVENTORYEMPTY = 0x78,    /* Byte invSlot */
-    S_INVENTORYITEM = 0x79 ,    /* Byte invSlot ThingDescription itm */
-    S_TRADEREQ = 0x7d ,         /* String otherperson Byte slotCount  ThingDescription itm */
-    S_TRADEACK = 0x7e,          /* String otherperson Byte slotCount  ThingDescription itm */
-    S_TRADECLOSE = 0x7f,
-    S_LIGHTLEVEL = 0x82 ,       /* Byte lightlevel Byte lightcolor */
-    S_MAGIC_EFFECT = 0x83,
-    S_ANIMATEDTEXT = 0x84,      /* Position pos Byte color String message */
-    S_DISTANCESHOT = 0x85,      /* Position pos1  Byte stackposition  Position pos2 */
-    S_CREATURESQUARE = 0x86,    /* Long creatureid Byte squarecolor */
-    S_CREATURELIGHT = 0x8d ,    /* Long creatureid Byte ?  Byte ? */
-    S_CREATURE_HEALTH = 0x8C,
-    S_SETOUTFIT = 0x8e,         /* Long creatureid Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType  // can extended look go here too? */
-    S_CREATURESPEED = 0x8f,     /* YIKES! I didnt handle this! */
-    S_TEXTWINDOW = 0x96,        /* Long windowId Byte icon  Byte maxlength String message */
-    S_STATUSMSG = 0xA0,         /* Status status */
-    S_SKILLS = 0xA1,            /* Skills skills */
-    S_PLAYER_CONDITION = 0xA2,
-    S_CANCELATTACK = 0xA3,
-    S_SPEAK = 0xAA,
-    S_CHANNELSDIALOG = 0xAB,    /* Byte channelCount  (Int channelId  String channelName) */
-    S_CHANNEL_OPEN = 0xAC,
-    S_OPENPRIV = 0xAD,          /* String playerName */
-    S_TEXTMESSAGE = 0xB4,       /* Byte msgClass String string */
-    S_CANCELWALK = 0xB5,        /* Byte direction */
-    S_FLOORUP = 0xBE,           /* Advanced topic; read separate text */
-    S_FLOORDOWN = 0xBF,         /* Advanced topic; read separate text */
-    S_OUTFITLIST = 0xC8,        /* Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType Byte firstModel Byte lastModel */
-    S_VIPADD = 0xD2,            /* Long guid String name Byte isOnline */
-    S_VIPLOGIN = 0xD3,          /* Long guid */
-    S_VIPLOGOUT = 0xD4          /* Long guid*/
+    S_MAPINIT =                0x0A, /* Long playerCreatureId Int unknownU16 (Byte reportBugs?) */
+    S_GMACTIONS =              0x0B, /* Used to be 32 unknown bytes, but with GMs removed it                                      might not be in use anymore */
+    S_DLG_ERROR =              0x14, /* String errorMessage */
+    S_DLG_INFO =               0x15,
+    S_TOOMANYPLAYERS =         0x16,
+    S_PING =                   0x1E,
+    S_NONCE =                  0x1F,
+    S_PLAYERLOC =              0x64, /* Position pos */
+    S_GO_NORTH =               0x65, /* MapDescription (18,1) */
+    S_GO_EAST =                0x66, /* MapDescription (1,14) */
+    S_GO_SOUTH =               0x67, /* MapDescription (18,1) */
+    S_GO_WEST =                0x68, /* MapDescription (1,14) */
+    S_TILEUPDATE =             0x69, /* Position pos TileDescription td */
+    S_ADDITEM =                0x6a, /* Position pos ThingDescription thing */
+    S_REPLACEITEM =            0x6b, /* Position pos Byte stackpos ThingDescription thing */
+    S_REMOVEITEM =             0x6c, /* Position pos Byte stackpos */
+    S_MOVE_CREATURE =          0x6d,
+    S_CONTAINER =              0x6e, /* Byte index Short containerIcon Byte slotCount ThingDescription item */
+    S_CONTAINERCLOSE =         0x6f, /* Byte index */
+    S_ADDITEMCONTAINER =       0x70, /* Byte index ThingDescription itm */
+    S_TRANSFORMITEMCONTAINER = 0x71, /* Byte index Byte slot */
+    S_REMOVEITEMCONTAINER =    0x72, /* Byte index Byte slot */
+    S_INVENTORYEMPTY =         0x78, /* Byte invSlot */
+    S_INVENTORYITEM =          0x79, /* Byte invSlot ThingDescription itm */
+    S_TRADEREQ =               0x7d, /* String otherperson Byte slotCount ThingDescription itm */
+    S_TRADEACK =               0x7e, /* String otherperson Byte slotCount ThingDescription itm */
+    S_TRADECLOSE =             0x7f,
+    S_LIGHTLEVEL =             0x82, /* Byte lightlevel Byte lightcolor */
+    S_MAGIC_EFFECT =           0x83,
+    S_ANIMATEDTEXT =           0x84, /* Position pos Byte color String message */
+    S_DISTANCESHOT =           0x85, /* Position pos1 Byte stackposition Position pos2 */
+    S_CREATURESQUARE =         0x86, /* Long creatureid Byte squarecolor */
+    S_CREATURE_HEALTH =        0x8C,
+    S_CREATURELIGHT =          0x8d, /* Long creatureid Byte ? Byte ? */
+    S_SETOUTFIT =              0x8e, /* Long creatureid Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType // can extended look go here too? */
+    S_CREATURESPEED =          0x8f, /* YIKES! I didnt handle this! */
+    S_TEXTWINDOW =             0x96, /* Long windowId Byte icon Byte maxlength String message */
+    S_STATUSMSG =              0xA0, /* Status status */
+    S_SKILLS =                 0xA1, /* Skills skills */
+    S_PLAYER_CONDITION =       0xA2,
+    S_CANCELATTACK =           0xA3,
+    S_SPEAK =                  0xAA,
+    S_CHANNELSDIALOG =         0xAB, /* Byte channelCount (Int channelId String channelName) */
+    S_CHANNEL_OPEN =           0xAC,
+    S_OPENPRIV =               0xAD, /* String playerName */
+    S_TEXTMESSAGE =            0xB4, /* Byte msgClass String string */
+    S_CANCELWALK =             0xB5, /* Byte direction */
+    S_FLOORUP =                0xBE, /* Advanced topic; read separate text */
+    S_FLOORDOWN =              0xBF, /* Advanced topic; read separate text */
+    S_OUTFITLIST =             0xC8, /* Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType Byte firstModel Byte lastModel */
+    S_VIPADD =                 0xd2, /* long guid string name byte isonline */
+    S_VIPLOGIN =               0xd3, /* long guid */
+    S_VIPLOGOUT =              0xd4  /* long guid*/
 };
 static const value_string from_gameserv_packet_types[] = {
 
@@ -476,16 +488,17 @@ static const value_string from_gameserv_packet_types[] = {
     { S_DLG_INFO,       "Info" },
     { S_TOOMANYPLAYERS, "Too many players" },
     { S_PING,           "Ping" },
+    { S_NONCE,          "Nonce" },
     { S_PLAYERLOC,      "Set player location" },
-    { S_GONORTH,        "Go north" },
-    { S_GOEAST,         "Go east" },
-    { S_GOSOUTH,        "Go south" },
-    { S_GOWEST,         "Go west" },
+    { S_GO_NORTH,        "Go north" },
+    { S_GO_EAST,         "Go east" },
+    { S_GO_SOUTH,        "Go south" },
+    { S_GO_WEST,         "Go west" },
     { S_TILEUPDATE,     "Update tile" },
     { S_ADDITEM,        "Add item" },
     { S_REPLACEITEM,    "Replace item" },
     { S_REMOVEITEM,     "Remove item" },
-    { S_CREATURE_GO,    "Creature goes" },
+    { S_MOVE_CREATURE,  "Move creature" },
     { S_CONTAINER,      "Open container" },
     { S_CONTAINERCLOSE, "Close container" },
 
@@ -550,9 +563,9 @@ static guint16 version_from_game_login_packet(const guint8 *buf, size_t len) {
     return 0;
 }
 
-static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree);
-static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree);
-static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *prinfo, proto_tree *mytree);
+static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *pinfo, proto_tree *mytree);
+static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *pinfo, proto_tree *mytree);
+static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *prinfo, proto_tree *mytree);
 
 static void wmem_free_null(void *buf) { wmem_free(NULL, buf); }
 
@@ -560,7 +573,7 @@ static int
 dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown)
 {
     struct tibia_convo *convo;
-    enum { GET_CHARLIST, CHAR_LOGIN, PING, GAME_PACKET } kind = GAME_PACKET; 
+    enum { GET_CHARLIST, CHAR_LOGIN, PING, GAME_PACKET } kind = GAME_PACKET;
     static char *kinds[] = {"GET_CHARLIST", "CHAR_LOGIN", "PING", "GAME_PACKET"};
     tvbuff_t *tvb_decrypted;
     int offset = 0, len = 0;
@@ -570,7 +583,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
     guint16 loginserv_protover, gameserv_protover;
     (void)unknown; (void)len;
 
-    /*FIXME: if announced length != real length it's not a tibia packet?*/
+    /* if announced length != real length it's not a tibia packet */
     if (tvb_captured_length_remaining(tvb, 2) != plen)
         return -1;
 
@@ -582,7 +595,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
         if (a32 == adler32_bytes(tvb_get_ptr(tvb, 6, a32len), a32len))
             convo->flags |= CONVO_PROTO_HAS_ADLER32;
     }
-    /* we dont need the rest */
+    /* FIXME: we dont need the rest? */
 
     loginserv_protover = version_from_charlist_request_packet(tvb_get_ptr(tvb, 0, plen), plen);
     gameserv_protover = version_from_game_login_packet(tvb_get_ptr(tvb, 0, plen), plen);
@@ -620,7 +633,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
     ti = proto_tree_add_item(tree, proto_tibia, tvb, 0, -1, ENC_NA);
     mytree = proto_item_add_subtree(ti, ett_tibia);
 
-    if (convo->char_name) {
+    if (show_char_info && convo->char_name) {
         ti = proto_tree_add_string(mytree, hf_acc_name, tvb, offset, 0, convo->acc);
         PROTO_ITEM_SET_GENERATED(ti);
 
@@ -640,24 +653,30 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
     switch (kind) {
         default:
 
-            if (((convo->flags & CONVO_PROTO_HAS_XTEA) && !(convo->flags & CONVO_KNOWS_XTEA)) || !decode_xtea)
+            if ((convo->flags & CONVO_PROTO_HAS_XTEA) && pinfo->num < convo->xtea_framenum)
             {
-                proto_tree_add_item(mytree, hf_undecoded_xtea_data, tvb, offset, plen - offset, ENC_NA);
-                return offset;
+                /* Currently there's one exception: The nonce the gameserv sends, after the TCP
+                 * connection is established */
+                if (tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN) != plen - offset
+                && tvb_get_guint8(tvb, offset+2) != S_NONCE) {
+                    proto_tree_add_item(mytree, hf_undecoded_xtea_data, tvb, offset, plen - offset, ENC_NA);
+                    return offset;
+                }
             }
 
-            ti = proto_tree_add_bytes_with_length(mytree, hf_xtea_key, tvb, 0, 1, (guint8*)convo->xtea_key, XTEA_KEY_LEN);
-            PROTO_ITEM_SET_GENERATED(ti);
-
-            /* FIXME: add expert info for XTEA failure */
+            if (show_xtea_key && (convo->flags & CONVO_PROTO_HAS_XTEA)) {
+                ti = proto_tree_add_bytes_with_length(mytree, hf_xtea_key, tvb, 0, 1, (guint8*)convo->xtea_key, XTEA_KEY_LEN);
+                PROTO_ITEM_SET_GENERATED(ti);
+            }
 
             tvb_decrypted = tvb;
-            len = tvb_captured_length_remaining(tvb, offset);
-            if (convo->flags & CONVO_PROTO_HAS_XTEA) {
+            if (pinfo->num > convo->xtea_framenum) {
                 guint32 *decrypted_buffer;
-                int end = offset + len;
+                int end;
                 guint32 *dstblock;
                 len = tvb_captured_length_remaining(tvb, offset);
+                end = offset + len;
+
                 if (len % 8 != 0)
                     return -1;
                 /* copying and then overwriting might seem a waste at first
@@ -669,18 +688,33 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
                     dstblock += 2;
                 }
 
-                /*TODO: check if failure*/
                 tvb_decrypted = tvb_new_child_real_data(tvb, (guint8*)decrypted_buffer, len, len);
                 tvb_set_free_cb(tvb_decrypted, g_free);
                 add_new_data_source(pinfo, tvb_decrypted, "Decrypted Game Data");
+
+                offset = 0;
+            }
+
+            // TODO: check how well that works without XTEA
+            len = offset + tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN) + 2;
+            ti = proto_tree_add_item(mytree, hf_payload_len, tvb_decrypted, offset, 2, ENC_LITTLE_ENDIAN);
+            offset += 2;
+            if (len - offset > tvb_captured_length_remaining(tvb_decrypted, 0) - 2)
+            {
+                if (convo->flags & CONVO_PROTO_HAS_XTEA) {
+                    expert_add_info(pinfo, ti, &ei_xtea_len_toobig);
+                    return offset;
+                } else {
+                    return -1;
+                }
             }
 
             if (pinfo->srcport == convo->servport && (convo->flags & CONVO_LOGINSERV)) {
-                return tibia_dissect_loginserv_packet(convo, tvb_decrypted, pinfo, mytree);
+                return tibia_dissect_loginserv_packet(convo, tvb_decrypted, offset, len, pinfo, mytree);
             } else if (pinfo->srcport == convo->servport) {
-                return tibia_dissect_gameserv_packet(convo, tvb_decrypted, pinfo, mytree);
+                return tibia_dissect_gameserv_packet(convo, tvb_decrypted, offset, len, pinfo, mytree);
             } else {
-                return tibia_dissect_client_packet(convo, tvb_decrypted, pinfo, mytree);
+                return tibia_dissect_client_packet(convo, tvb_decrypted, offset, len, pinfo, mytree);
             }
         case GET_CHARLIST:
             col_set_str(pinfo->cinfo, COL_PROTOCOL, "Tibia Login");
@@ -743,7 +777,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
                 tvb_memcpy(tvb_decrypted, convo->xtea_key, offset, XTEA_KEY_LEN);
                 proto_tree_add_item(mytree, hf_xtea_key, tvb_decrypted, offset, XTEA_KEY_LEN, ENC_BIG_ENDIAN);
                 offset += XTEA_KEY_LEN;
-                convo->flags |= CONVO_KNOWS_XTEA;
+                convo->xtea_framenum = pinfo->num;
 
                 if (!mytree)
                     return offset;
@@ -767,7 +801,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
                     if (convo) {
                         convo->acc = wmem_strdup_printf(wmem_file_scope(), "%lu", (unsigned long)accnum);
                     }
-                    proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 4, NULL, "%lu", (unsigned long)accnum); 
+                    proto_tree_add_string_format_value(mytree, hf_acc_name, tvb_decrypted, offset, 4, NULL, "%lu", (unsigned long)accnum);
                     offset += 4;
 
                 }
@@ -858,21 +892,13 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* unknown
     return offset;
 }
 
-
-static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree)
+static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *pinfo, proto_tree *mytree)
 {
-    int offset = 0;
     guint8 cmd;
-    guint16 len;
     proto_tree *cmdtree;
     proto_item *subti;
     const char *str;
     (void)convo;(void)pinfo;
-    proto_tree_add_item(mytree, hf_xtea_len, tvb, offset, 2, ENC_LITTLE_ENDIAN);
-    len = tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN) + 2;
-    if (len > tvb_captured_length_remaining(tvb, offset))
-        return -1;
-    offset += 2;
 
     while (offset < len) {
         subti = proto_tree_add_item(mytree, hf_loginserv_command, tvb, offset, 1, ENC_NA);
@@ -900,7 +926,7 @@ static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *t
                             /*struct rsakey tmp_entry;*/
                             const guint8 *addr;
                                 struct rsakey *entry = g_new(struct rsakey, 1);
-                            
+
 
                             proto_tree_add_item(subtree, hf_charlist_entry_name, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
                             offset += tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN) + 2;
@@ -911,7 +937,7 @@ static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *t
                             alloc_address_tvb(NULL, &tmp_entry.addr, AT_IPv4, 4, tvb, offset);
                             proto_tree_add_item(subtree, hf_charlist_entry_ip, tvb, offset, 4, ENC_BIG_ENDIAN);
                             offset += 4;
-                            
+
 
                             tmp_entry.port = tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN);
                             proto_tree_add_item(subtree, hf_charlist_entry_port, tvb, offset, 2, ENC_LITTLE_ENDIAN);
@@ -981,64 +1007,82 @@ void dump_table(void) {
     g_hash_table_foreach(rsakeys, dump_table_entry, NULL);
 }
 
+struct state {
+    struct tibia_convo *convo;
+    tvbuff_t *tvb;
+    gint offset;
+    packet_info *pinfo;
+    proto_tree *tree;
+};
 
-static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree)
+/** Game commands **/
+
+static inline void dissect_string(struct state *s, gint hfid, const char *msg _U_)
 {
-    int offset = 0;
+    guint16 len = tvb_get_guint16(s->tvb, s->offset, ENC_LITTLE_ENDIAN);
+    proto_tree_add_item(s->tree, hfid, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
+    s->offset += len + 2;
+}
+static inline void dissect_u16(struct state *s, gint hfid, const char *msg _U_)
+{
+    proto_tree_add_item(s->tree, hfid, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN);
+    s->offset += 2;
+}
+static inline void dissect_channel_open(guint8 cmd _U_, struct state *s) {
+    dissect_u16(s, hf_channel_id, NULL);
+    dissect_string(s, hf_channel_name, NULL);
+}
+static inline void dissect_player_condition(guint cmd _U_, struct state *s) {
+    proto_tree_add_item(s->tree, hf_char_flag_poison,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_fire,       s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_energy,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_drunk,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_manashield, s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_paralyze,   s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_haste,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_battle,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_water,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_frozen,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_dazzled,    s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree, hf_char_flag_cursed,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    s->offset += 2;
+}
+
+static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *pinfo, proto_tree *mytree)
+{
     guint8 cmd;
-    guint16 len, clen;
-    proto_tree *subtree, *cmdtree;
-    proto_item *subti;
     const char *str;
-    (void)convo; (void) subtree; (void)subti;
+    struct state s;
 
-    proto_tree_add_item(mytree, hf_xtea_len, tvb, offset, 2, ENC_LITTLE_ENDIAN);
-    len = tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN) + 2;
-    if (len > tvb_captured_length_remaining(tvb, offset))
-        return -1;
-    offset += 2;
+    s.convo  = convo;
+    s.tvb    = tvb;
+    s.offset = offset;
+    s.pinfo  = pinfo;
 
-    while (offset < len) {
-        subti = proto_tree_add_item(mytree, hf_gameserv_command, tvb, offset, 1, ENC_NA);
-        cmdtree = proto_item_add_subtree(subti, ett_command);
+    while (s.offset < len) {
+        proto_item *subti = proto_tree_add_item(mytree, hf_gameserv_command, s.tvb, s.offset, 1, ENC_NA);
+        s.tree = proto_item_add_subtree(subti, ett_command);
 
-        switch (cmd = tvb_get_guint8(tvb, offset++)) {
-            case S_DLG_ERROR:
+        switch (cmd = tvb_get_guint8(s.tvb, s.offset++)) {
             case S_DLG_INFO:
-                clen = tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN) + 2;
-                proto_tree_add_item(cmdtree, cmd == S_DLG_ERROR ? hf_dlg_error : hf_dlg_info, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
-                offset += clen;
+            case S_DLG_ERROR:
+                dissect_string(&s, cmd == S_DLG_ERROR ? hf_dlg_error : hf_dlg_info, NULL);
                 break;
             case S_CHANNEL_OPEN:
-                clen = tvb_get_guint16(tvb, offset+2, ENC_LITTLE_ENDIAN) + 2;
-                proto_tree_add_item(cmdtree, hf_channel_id, tvb, offset, 2, ENC_LITTLE_ENDIAN);
-                offset += 2;
-                proto_tree_add_item(cmdtree, hf_channel_name, tvb, offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
-                offset += clen;
+                dissect_channel_open(cmd, &s);
                 break;
             case S_PLAYER_CONDITION:
-                proto_tree_add_item(cmdtree, hf_char_flag_poison, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_fire, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_energy, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_drunk, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_manashield, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_paralyze, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_haste, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_battle, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_water, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_frozen, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_dazzled, tvb, offset, 2, ENC_BIG_ENDIAN);
-                proto_tree_add_item(cmdtree, hf_char_flag_cursed, tvb, offset, 2, ENC_BIG_ENDIAN);
-                offset += 2;
+                dissect_player_condition(cmd, &s);
                 break;
             case S_PING:
                 break;
             default:
-                call_data_dissector(tvb_new_subset_length(tvb, offset, len - offset), pinfo, cmdtree);
+                call_data_dissector(tvb_new_subset_length(s.tvb, s.offset, len - s.offset), s.pinfo, s.tree);
 
-                offset = len;
+                s.offset = len;
         }
-        proto_item_set_end(cmdtree, tvb, offset);
+
+        proto_item_set_end(s.tree, s.tvb, s.offset);
 
         str = try_val_to_str(cmd, from_gameserv_packet_types);
         str = str ? str : "Unknown";
@@ -1049,27 +1093,19 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
     }
 
 
-    return offset;
+    return s.offset;
 }
 
-static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb, packet_info *pinfo, proto_tree *mytree)
+static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *pinfo, proto_tree *mytree)
 {
-    int offset = 0;
     guint8 cmd;
-    guint16 len, clen;
-    proto_tree *subtree, *cmdtree;
-    proto_item *subti;
+    guint16 clen;
+    proto_tree *cmdtree;
     const char *str;
-    (void)convo; (void) subtree; (void)subti;
-
-    proto_tree_add_item(mytree, hf_xtea_len, tvb, offset, 2, ENC_LITTLE_ENDIAN);
-    len = tvb_get_guint16(tvb, offset, ENC_LITTLE_ENDIAN) + 2;
-    if (len > tvb_captured_length_remaining(tvb, offset))
-        return -1;
-    offset += 2;
+    (void)convo;
 
     while (offset < len) {
-        subti = proto_tree_add_item(mytree, hf_client_command, tvb, offset, 1, ENC_NA);
+        proto_item *subti = proto_tree_add_item(mytree, hf_client_command, tvb, offset, 1, ENC_NA);
         cmdtree = proto_item_add_subtree(subti, ett_command);
 
         switch (cmd = tvb_get_guint8(tvb, offset++)) {
@@ -1193,13 +1229,13 @@ proto_register_tibia(void)
                 NULL, HFILL }
         },
         { &hf_undecoded_rsa_data,
-            { "RSA Encrypted login data", "tibia.rsa_data",
+            { "RSA-encrypted login data", "tibia.rsa_data",
                 FT_BYTES, BASE_NONE,
                 NULL, 0x0,
                 NULL, HFILL }
         },
         { &hf_undecoded_xtea_data,
-            { "XTEA Encrypted game data", "tibia.xtea_data",
+            { "XTEA-encrypted game data", "tibia.xtea_data",
                 FT_BYTES, BASE_NONE,
                 NULL, 0x0,
                 NULL, HFILL }
@@ -1378,7 +1414,7 @@ proto_register_tibia(void)
                 NULL, 0x0,
                 NULL, HFILL }
         },
-        { &hf_xtea_len,
+        { &hf_payload_len,
             { "Payload length", "tibia.payload.len",
                 FT_UINT16, BASE_DEC,
                 NULL, 0x0,
@@ -1484,7 +1520,6 @@ proto_register_tibia(void)
 
     };
 
-    module_t *tibia_module;
     static uat_field_t rsakeylist_uats_flds[] = {
         UAT_FLD_CSTRING_OTHER(rsakeylist_uats, ipaddr, "IP address", rsakeys_uat_fld_ip_chk_cb, "IPv4 or IPv6 address"),
         UAT_FLD_CSTRING_OTHER(rsakeylist_uats, port, "Port", rsakeys_uat_fld_port_chk_cb, "Port Number"),
@@ -1507,6 +1542,17 @@ proto_register_tibia(void)
         &ett_client_info,
         &ett_charlist,
     };
+
+    static ei_register_info ei[] = {
+        { &ei_xtea_len_toobig,
+            { "tibia.error.xtea.length.toobig", PI_DECRYPTION, PI_ERROR,
+                "XTEA-encrypted length exceeds packet", EXPFILL }
+        }
+    };
+
+    module_t *tibia_module;
+    expert_module_t *expert_tibia;
+
     proto_tibia = proto_register_protocol (
             "Tibia Protocol", /* name */
             "Tibia",          /* short name */
@@ -1515,10 +1561,19 @@ proto_register_tibia(void)
     proto_register_field_array(proto_tibia, hf, array_length(hf));
     proto_register_subtree_array(ett, array_length(ett));
 
+    expert_tibia = expert_register_protocol(proto_tibia);
+    expert_register_field_array (expert_tibia, ei, array_length (ei));
+
     tibia_module = prefs_register_protocol(proto_tibia, proto_reg_handoff_tibia);
 
     prefs_register_bool_preference(tibia_module, "try_otserv_key", "Try OTServ's RSA key",
         "Try the default RSA key in use by nearly all Open Tibia servers", &try_otserv_key);
+
+    prefs_register_bool_preference(tibia_module, "show_char_info", "Show character info for each packet",
+        "Shows account name, password and active character for every packet", &show_char_info);
+
+    prefs_register_bool_preference(tibia_module, "show_xtea_key", "Show symmetric key used for each packet",
+        "Shows which XTEA key was applied for a packet", &show_xtea_key);
 
     rsakeys = g_hash_table_new_full(rsakey_hash, rsakey_equal, rsakey_free, NULL);
 
@@ -1566,7 +1621,7 @@ proto_register_tibia(void)
 
 
     // FIXME best way to store this in source
-    const char sexp[] = 
+    const char sexp[] =
         "(private-key (rsa"
         "(n #9b646903b45b07ac956568d87353bd7165139dd7940703b03e6dd079399661b4a837aa60561d7ccb9452fa0080594909882ab5bca58a1a1b35f8b1059b72b1212611c6152ad3dbb3cfbee7adc142a75d3d75971509c321c5c24a5bd51fd460f01b4e15beb0de1930528a5d3f15c1e3cbf5c401d6777e10acaab33dbe8d5b7ff5#)"
         "(e #010001#)"
@@ -1800,7 +1855,7 @@ xtea_parse_uat(void)
         for (offset = 0; offset < XTEA_KEY_LEN; offset++)
             key[offset] = (g_ascii_xdigit_value(uats->key[2*offset]) << 4)
                         +  g_ascii_xdigit_value(uats->key[2*offset + 1]);
-        
+
         g_hash_table_insert(xteakeys, GUINT_TO_POINTER(uats->framenum), key);
     }
 }
