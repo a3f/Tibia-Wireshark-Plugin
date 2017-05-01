@@ -34,6 +34,7 @@ flags = [
     '-isystem', '/opt/local/include/glib-2.0',
 
     '-Wc++98-compat', '-Wc++98-compat-pedantic',
+    '-Wno-missing-field-initializers',
 
     '-I', 'include'
     '-I', '../include'
