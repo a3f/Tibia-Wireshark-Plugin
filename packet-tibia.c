@@ -25,14 +25,10 @@
 /* Tibia (https://tibia.com) is a Massively Multiplayer Online Role-Playing
  * Game (MMORPG) by Cipsoft GmbH.
  *
- * Transport is over TCP, with recent versions encrypting player interaction
- * with XTEA. Authentication and key exchange is done with a hard-coded
- * RSA key in the client.
- *
  * Three official clients exist: The current Qt-based 11.0+ client,
  * the old C++ client used from Tibia 7.0 till 10.99 and the Flash client.
  * The latter two are being phased out. They use the same protocol,
- * except for different key exchange in the Flash client. The flash client is
+ * except for different key exchange in the Flash client. The Flash client is
  * not supported by this dissector.
  *
  * The dissector supports Tibia versions from 7.0 (2002) till current
@@ -41,12 +37,46 @@
  * the official servers in popularity, therefore compatability with older
  * protocol iterations should be maintained.
  *
+ * Transport is over TCP, with recent versions encrypting player interaction
+ * with XTEA. Authentication and key exchange is done with a hard-coded
+ * RSA key in the client.
+ *
+ * Two protocols are dissected: The Tibia login protocol and the Tibia game
+ * protocol. Traditionally, login servers were stateless and only responsible
+ * for providing the addresses of the game servers alongside the character
+ * list upon sucessful authentication. Then a new authentication request
+ * (this time with character selection) is sent to the gameserver.
+ * That way, a client who knows the game server address can very well skip
+ * the login server entirely. Starting with 10.61, this is no longer possible,
+ * as the login server provides an authentication code that needs to be sent
+ * to the game server.
+ *
+ * Starting with Tibia 7.61, login server requests can't be reliably
+ * differentiated from game server requests. Therefore we register a heuristic
+ * dissector for the login server and a normal one for the game server.
+ *
+ * Packets from and to the game server contain commands. Commands are
+ * identified by the first octet and are variable in length. The dissector has
+ * most commands and description strings hard-coded. However, a complete
+ * implementation of the game protocol is unlikely.
+ *
  * The RSA private key usually used by OTServ is hard-coded in. Server
  * admins may add their own private key in PEM or PKCS#12 format over
  * the UAT. For servers where the private key is indeed private (like
  * for official servers), the symmetric XTEA key (retrievable by memory
  * peeking or MitM) may be provided to the dissector via UAT.
  *
+ * Unsurprisingly, no official specification of the protocol exist, following
+ * resources have been written by the community:
+ *
+ * - Khaos:
+ * - TibiaAPI
+ * - OTServ
+ * - TFS
+ * - OTClient
+ *
+ * An official slideset by Cipsoft detailing the architecture of Tibia
+ * from gamecon 2011 is also available:
  *
  * Tibia is a registered trademark of Cipsoft GmbH.
  */
@@ -973,9 +1003,6 @@ dissect_game_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, packet
 
     // TODO: check how well this all works without XTEA
     if (is_xtea_encrypted) {
-        if (convo->has.xtea && pinfo->num < convo->xtea_framenum)
-            return offset;
-
         if (show_xtea_key && convo->has.xtea) {
             ti = proto_tree_add_bytes_with_length(mytree, hf_xtea_key, tvb, 0, 1, (guint8*)convo->xtea_key, XTEA_KEY_LEN);
             PROTO_ITEM_SET_GENERATED(ti);
@@ -1004,13 +1031,16 @@ dissect_game_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, packet
             add_new_data_source(pinfo, tvb_decrypted, "Decrypted Game Data");
 
             offset = 0;
+        } else {
+            proto_tree_add_item(mytree, hf_undecoded_xtea_data, tvb, offset, len, ENC_NA);
+            return offset;
         }
     }
     if (convo->has.xtea) {
-        len = offset + tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN) + 2;
+        len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
         ti = proto_tree_add_item(mytree, hf_payload_len, tvb_decrypted, offset, 2, ENC_LITTLE_ENDIAN);
         offset += 2;
-        if (len - offset > tvb_captured_length_remaining(tvb_decrypted, 0) - 2)
+        if (len > tvb_captured_length_remaining(tvb_decrypted, offset))
         {
             expert_add_info(pinfo, ti, &ei_xtea_len_toobig);
             return offset;
@@ -1022,7 +1052,7 @@ dissect_game_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, packet
         return tibia_dissect_loginserv_packet(convo, tvb_decrypted, offset, len, pinfo, mytree);
     
     if (!dissect_game_commands) {
-        call_data_dissector(tvb_new_subset_length(tvb, offset, len), pinfo, mytree);
+        call_data_dissector(tvb_new_subset_length(tvb_decrypted, offset, len), pinfo, mytree);
         return offset + len;
     }
 
@@ -2083,7 +2113,8 @@ proto_register_tibia(void)
 
     xteakeys_uat = uat_new("XTEA Keys",
             sizeof(struct xteakeys_assoc),
-            "tibia_xtea_keys",       /* filename */
+            "tibia_xtea_keys",       // filename 
+            /*NULL,*/
             TRUE,                    /* from_profile */
             &xteakeylist_uats,       /* data_ptr */
             &nxteakeys,              /* numitems_ptr */
