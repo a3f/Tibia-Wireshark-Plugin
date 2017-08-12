@@ -28,8 +28,8 @@
  * Three official clients exist: The current Qt-based 11.0+ client,
  * the old C++ client used from Tibia 7.0 till 10.99 and the Flash client.
  * The latter two are being phased out. They use the same protocol,
- * except for different key exchange in the Flash client. The Flash client is
- * not supported by this dissector.
+ * except that the session key for the Flash client is transported alongside
+ * the character list over HTTPS. We don't support The Flash client.
  *
  * The dissector supports Tibia versions from 7.0 (2002) till current
  * 10.99 (2017-05-01). Tibia has an active open source server emulater
@@ -48,8 +48,8 @@
  * (this time with character selection) is sent to the gameserver.
  * That way, a client who knows the game server address can very well skip
  * the login server entirely. Starting with 10.61, this is no longer possible,
- * as the login server provides an authentication code that needs to be sent
- * to the game server.
+ * as the login server provides a session key that needs to be sent to the
+ * game server.
  *
  * Starting with Tibia 7.61, login server requests can't be reliably
  * differentiated from game server requests. Therefore we register a heuristic
@@ -57,26 +57,30 @@
  *
  * Packets from and to the game server contain commands. Commands are
  * identified by the first octet and are variable in length. The dissector has
- * most commands and description strings hard-coded. However, a complete
- * implementation of the game protocol is unlikely.
+ * most command names hard-coded. However, a complete implementation of the
+ * game protocol is unlikely.
  *
  * The RSA private key usually used by OTServ is hard-coded in. Server
  * admins may add their own private key in PEM or PKCS#12 format over
- * the UAT. For servers where the private key is indeed private (like
+ * an UAT. For servers where the private key is indeed private (like
  * for official servers), the symmetric XTEA key (retrievable by memory
  * peeking or MitM) may be provided to the dissector via UAT.
  *
  * Unsurprisingly, no official specification of the protocol exist, following
  * resources have been written by the community:
  *
- * - Khaos:
- * - TibiaAPI
- * - OTServ
- * - TFS
- * - OTClient
+ * - OTServ: Community effort to replicate a Tibia Server.
+ * - Khaos:  Partial specification of the game protocol as of 2006 
+ * - TibiaAPI: Bot framework, containing a listing of cammands as of 2009
+ * - TFS: OTServ-Fork which is kept up-to-date with the official Protocol
+ * - otclient: Open Source implementation of a Tibia Client
  *
  * An official slideset by Cipsoft detailing the architecture of Tibia
  * from gamecon 2011 is also available:
+ *
+ * The protocol, as implemented here, has been inferred from network footage
+ * and execution traces and was written from scratch. Especially, no code
+ * of Cipsoft GmbH was consulted or used.
  *
  * Tibia is a registered trademark of Cipsoft GmbH.
  */
@@ -215,12 +219,24 @@ static gint hf_client_command       = -1;
 static gint hf_motd                 = -1;
 static gint hf_dlg_error            = -1;
 static gint hf_dlg_info             = -1;
+
 static gint hf_charlist             = -1;
+static gint hf_char                 = -1;
 static gint hf_charlist_length      = -1;
 static gint hf_charlist_entry_name  = -1;
 static gint hf_charlist_entry_world = -1;
 static gint hf_charlist_entry_ip    = -1;
 static gint hf_charlist_entry_port  = -1;
+
+static gint hf_worldlist            = -1;
+static gint hf_world                = -1;
+static gint hf_worldlist_length     = -1;
+static gint hf_worldlist_entry_name = -1;
+static gint hf_worldlist_entry_ip   = -1;
+static gint hf_worldlist_entry_port = -1;
+static gint hf_worldlist_entry_id   = -1;
+
+
 static gint hf_pacc_days            = -1;
 static gint hf_channel_id           = -1;
 static gint hf_channel_name         = -1;
@@ -266,6 +282,9 @@ static gint ett_command       = -1;
 static gint ett_file_versions = -1;
 static gint ett_client_info   = -1;
 static gint ett_charlist      = -1;
+static gint ett_worldlist     = -1;
+static gint ett_char          = -1;
+static gint ett_world         = -1;
 
 static expert_field ei_xtea_len_toobig = EI_INIT;
 
@@ -525,12 +544,13 @@ static const value_string from_client_packet_types[] = {
     { 0, NULL }
 };
 
-enum { LOGINSERV_DLG_ERROR = 0x0A, LOGINSERV_DLG_ERROR2 = 0x0B, LOGINSERV_DLG_MOTD = 0x14, LOGINSERV_DLG_CHARLIST = 0x64 };
+enum loginserv_commands { LOGINSERV_DLG_ERROR = 0x0A, LOGINSERV_DLG_ERROR2 = 0x0B, LOGINSERV_DLG_MOTD = 0x14, LOGINSERV_DLG_CHARLIST = 0x64, LOGINSERV_SESSION_KEY = 0x28 };
 static const value_string from_loginserv_packet_types[] = {
     { LOGINSERV_DLG_MOTD,     "MOTD" },
     { LOGINSERV_DLG_CHARLIST, "Charlist" },
-    { LOGINSERV_DLG_ERROR,     "Error" },
-    { LOGINSERV_DLG_ERROR2,    "Error" },
+    { LOGINSERV_SESSION_KEY,  "Session key" },
+    { LOGINSERV_DLG_ERROR,    "Error" },
+    { LOGINSERV_DLG_ERROR2,   "Error" },
 
     { 0, NULL }
 };
@@ -601,10 +621,10 @@ static const value_string from_gameserv_packet_types[] = {
     { S_PING,           "Ping" },
     { S_NONCE,          "Nonce" },
     { S_PLAYERLOC,      "Set player location" },
-    { S_GO_NORTH,        "Go north" },
-    { S_GO_EAST,         "Go east" },
-    { S_GO_SOUTH,        "Go south" },
-    { S_GO_WEST,         "Go west" },
+    { S_GO_NORTH,       "Go north" },
+    { S_GO_EAST,        "Go east" },
+    { S_GO_SOUTH,       "Go south" },
+    { S_GO_WEST,        "Go west" },
     { S_TILEUPDATE,     "Update tile" },
     { S_ADDITEM,        "Add item" },
     { S_REPLACEITEM,    "Replace item" },
@@ -659,7 +679,7 @@ static int dissect_game_packet(struct tibia_convo *convo, tvbuff_t *tvb, int off
 static void wmem_free_null(void *buf) { wmem_free(NULL, buf); }
 
 static int
-dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U_)
+dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
 {
     struct tibia_convo *convo;
     tvbuff_t *tvb_decrypted = tvb;
@@ -852,7 +872,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
         offset += 1;
     }
 
-    if (convo->has.session_key) {
+    if (convo->has.session_key && !convo->loginserv_is_peer) {
         len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
         if (offset + len + 2 > plen) return -1;
         if (convo) {
@@ -892,7 +912,7 @@ dissect_tibia(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U
         offset += len + 2;
     }
 
-    if (!convo->has.session_key) {
+    if (!convo->has.session_key || convo->loginserv_is_peer) {
         len = tvb_get_guint16(tvb_decrypted, offset, ENC_LITTLE_ENDIAN);
         if (convo) {
             convo->pass = (char*)tvb_memdup(wmem_file_scope(), tvb_decrypted, offset + 2, len + 1);
@@ -1067,55 +1087,75 @@ struct state {
     tvbuff_t *tvb;
     gint offset;
     packet_info *pinfo;
-    proto_tree *tree;
+    struct tree_stack_slot {
+        proto_tree *top;
+        struct tree_stack_slot *next;
+    } tree;
+
 };
+static inline proto_item *dissect_push_tree(struct state *s, gint hfid, gint ett)
+{
+    struct tree_stack_slot *slot = wmem_new(wmem_packet_scope(), struct tree_stack_slot);
+    proto_item *subti = proto_tree_add_item(s->tree.top, hfid, s->tvb, s->offset, 0, ENC_NA);
+    *slot = s->tree;
+    s->tree.next = slot;
+    s->tree.top = proto_item_add_subtree(subti, ett);
+    return subti;
+}
+static inline void dissect_pop_tree(struct state *s)
+{
+    struct tree_stack_slot *next = s->tree.next;
+    proto_item_set_end(s->tree.top, s->tvb, s->offset);
+    s->tree = *s->tree.next;
+    wmem_free(wmem_packet_scope(), next);
+}
 
 /** Game commands **/
 
 static inline void dissect_unknown(struct state *s, guint len) {
-    call_data_dissector(tvb_new_subset_length(s->tvb, s->offset, len), s->pinfo, s->tree);
+    call_data_dissector(tvb_new_subset_length(s->tvb, s->offset, len), s->pinfo, s->tree.top);
     s->offset += len;
 }
-static inline void dissect_string(struct state *s, gint hfid, const char *msg _U_) {
+static inline void dissect_string(struct state *s, gint hfid) {
     guint16 len = tvb_get_guint16(s->tvb, s->offset, ENC_LITTLE_ENDIAN);
-    proto_tree_add_item(s->tree, hfid, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
+    proto_tree_add_item(s->tree.top, hfid, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
     s->offset += 2 + len;
 }
-static inline guint8 dissect_u8(struct state *s, gint hfid, const char *msg _U_) {
+static inline guint8 dissect_u8(struct state *s, gint hfid) {
     guint8 ret = tvb_get_guint8(s->tvb, s->offset);
-    proto_tree_add_item(s->tree, hfid, s->tvb, s->offset, 1, ENC_NA);
+    proto_tree_add_item(s->tree.top, hfid, s->tvb, s->offset, 1, ENC_NA);
     s->offset += sizeof (guint8);
     return ret;
 }
-static inline guint16 dissect_u16(struct state *s, gint hfid, const char *msg _U_) {
+static inline guint16 dissect_u16(struct state *s, gint hfid) {
     guint16 ret = tvb_get_guint16(s->tvb, s->offset, ENC_LITTLE_ENDIAN);
-    proto_tree_add_item(s->tree, hfid, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN);
+    proto_tree_add_item(s->tree.top, hfid, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN);
     s->offset += sizeof (guint16);
     return ret;
 }
-static inline guint32 dissect_u32(struct state *s, gint hfid, const char *msg _U_) {
+static inline guint32 dissect_u32(struct state *s, gint hfid) {
     guint32 ret = tvb_get_guint32(s->tvb, s->offset, ENC_LITTLE_ENDIAN);
-    proto_tree_add_item(s->tree, hfid, s->tvb, s->offset, 4, ENC_LITTLE_ENDIAN);
+    proto_tree_add_item(s->tree.top, hfid, s->tvb, s->offset, 4, ENC_LITTLE_ENDIAN);
     s->offset += sizeof (guint32);
     return ret;
 }
 static inline void dissect_channel_open(struct state *s) {
-    dissect_u16(s, hf_channel_id, NULL);
-    dissect_string(s, hf_channel_name, NULL);
+    dissect_u16(s, hf_channel_id);
+    dissect_string(s, hf_channel_name);
 }
 static inline void dissect_player_condition(struct state *s) {
-    proto_tree_add_item(s->tree, hf_char_flag_poison,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_fire,       s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_energy,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_drunk,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_manashield, s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_paralyze,   s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_haste,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_battle,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_water,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_frozen,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_dazzled,    s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
-    proto_tree_add_item(s->tree, hf_char_flag_cursed,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_poison,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_fire,       s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_energy,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_drunk,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_manashield, s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_paralyze,   s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_haste,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_battle,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_water,      s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_frozen,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_dazzled,    s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
+    proto_tree_add_item(s->tree.top, hf_char_flag_cursed,     s->tvb, s->offset, 2, ENC_BIG_ENDIAN);
     s->offset += 2;
 }
 
@@ -1128,52 +1168,52 @@ static const value_string speech_ids[] = {
 };
 
 static inline void dissect_speech(struct state *s) {
-    guint8 type = dissect_u8(s, hf_speech_id, NULL);
-    if (type == 0x7) dissect_u16(s, hf_channel_id, NULL);
-    dissect_string(s, hf_chat_msg, NULL);
+    guint8 type = dissect_u8(s, hf_speech_id);
+    if (type == 0x7) dissect_u16(s, hf_channel_id);
+    dissect_string(s, hf_chat_msg);
 }
 static inline void dissect_coord(struct state *s) {
     proto_item *ti;
     guint base_offset = s->offset;
     guint x, y, z;
-    ti = proto_tree_add_item_ret_uint(s->tree, hf_coords_x, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN, &x);
+    ti = proto_tree_add_item_ret_uint(s->tree.top, hf_coords_x, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN, &x);
     PROTO_ITEM_SET_HIDDEN(ti);
     s->offset += sizeof (guint16);
-    ti = proto_tree_add_item_ret_uint(s->tree, hf_coords_y, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN, &y);
+    ti = proto_tree_add_item_ret_uint(s->tree.top, hf_coords_y, s->tvb, s->offset, 2, ENC_LITTLE_ENDIAN, &y);
     PROTO_ITEM_SET_HIDDEN(ti);
     s->offset += sizeof (guint16);
-    ti = proto_tree_add_item_ret_uint(s->tree, hf_coords_z, s->tvb, s->offset, 1, ENC_NA, &z);
+    ti = proto_tree_add_item_ret_uint(s->tree.top, hf_coords_z, s->tvb, s->offset, 1, ENC_NA, &z);
     PROTO_ITEM_SET_HIDDEN(ti);
     s->offset += sizeof (guint8);
 
-    proto_tree_add_string_format_value(s->tree, hf_coords, s->tvb, base_offset, s->offset - base_offset,
+    proto_tree_add_string_format_value(s->tree.top, hf_coords, s->tvb, base_offset, s->offset - base_offset,
             NULL, "(%u, %u, %u)", x, y, z);
 
 }
 
 static inline void dissect_stackpos(struct state *s) {
-    dissect_u8(s, hf_stackpos, NULL);
+    dissect_u8(s, hf_stackpos);
 }
 #if 0
 static inline void dissect_item(struct state *s) {
-    dissect_u16(s, hf_item, NULL);
+    dissect_u16(s, hf_item);
 }
 #endif
 static inline void dissect_container(struct state *s) {
-    dissect_u8(s, hf_container, NULL);
+    dissect_u8(s, hf_container);
 }
 static inline void dissect_inventory(struct state *s) {
-    dissect_u16(s, hf_inventory, NULL);
+    dissect_u16(s, hf_inventory);
 }
 static inline void dissect_vip(struct state *s) {
-    dissect_u32(s, hf_vip, NULL);
+    dissect_u32(s, hf_vip);
 }
 
 static void rsakey_free(void *_rsakey);
 
 static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *tvb, int offset, guint16 len, packet_info *pinfo, proto_tree *mytree)
 {
-    enum server_commands cmd;
+    enum loginserv_commands cmd;
     const char *str;
     struct state s;
 
@@ -1184,41 +1224,70 @@ static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *t
 
     while (s.offset < len) {
         proto_item *subti = proto_tree_add_item(mytree, hf_loginserv_command, s.tvb, s.offset, 1, ENC_NA);
-        s.tree = proto_item_add_subtree(subti, ett_command);
+        s.tree.top = proto_item_add_subtree(subti, ett_command);
 
         switch (cmd = tvb_get_guint8(s.tvb, s.offset++)) {
             case LOGINSERV_DLG_ERROR:
             case LOGINSERV_DLG_ERROR2:
             case LOGINSERV_DLG_MOTD:
-                dissect_string(&s, cmd == LOGINSERV_DLG_MOTD ? hf_motd : hf_dlg_error, NULL);
+                dissect_string(&s, cmd == LOGINSERV_DLG_MOTD ? hf_motd : hf_dlg_error);
+                break;
+            case LOGINSERV_SESSION_KEY:
+                dissect_string(&s, hf_session_key);
                 break;
             case LOGINSERV_DLG_CHARLIST:
-                {
-                    guint8 char_count = tvb_get_guint8(s.tvb, s.offset);
-                    proto_tree_add_item(s.tree, hf_charlist_length, s.tvb, s.offset, 1, ENC_LITTLE_ENDIAN);
-                    s.offset++;
-                    subti = proto_tree_add_item(s.tree, hf_charlist, s.tvb, s.offset, len - s.offset - 1, ENC_NA);
+                if (convo->has.worldlist_in_charlist) {
+                    guint8 world_count = dissect_u8(&s, hf_worldlist_length);
+                    dissect_unknown(&s, 1);
+                    /* Empty character list? */
+                    if (world_count) {
+                        dissect_push_tree(&s, hf_worldlist, ett_worldlist);
+                        while (world_count --> 0) {
+                            dissect_push_tree(&s, hf_world, ett_world);
+
+                            dissect_string(&s, hf_worldlist_entry_name);
+                            dissect_string(&s, hf_worldlist_entry_ip);
+                            dissect_u16(&s, hf_worldlist_entry_port);
+                            dissect_unknown(&s, 1);
+                            dissect_u8(&s, hf_worldlist_entry_id);
+
+                            dissect_pop_tree(&s);
+                        }
+
+                        dissect_pop_tree(&s);
+                    }
+                    dissect_unknown(&s, 1);
+                    if (s.offset < len) {
+                        dissect_push_tree(&s, hf_charlist, ett_charlist);
+                        while (s.offset < len) {
+                            dissect_push_tree(&s, hf_char, ett_char);
+
+                            dissect_string(&s, hf_charlist_entry_name);
+                            dissect_u8(&s, hf_worldlist_entry_id);
+
+                            dissect_pop_tree(&s);
+                        }
+                        dissect_pop_tree(&s);
+                    }
+                } else {
+                    guint8 char_count = dissect_u8(&s, hf_charlist_length);
                     if (char_count) {
                         guint16 port;
                         int ipv4_offset;
-                        proto_tree *subtree = proto_item_add_subtree(subti, ett_charlist);
+                        dissect_push_tree(&s, hf_charlist, ett_charlist);
+
                         while (char_count --> 0) {
-                            proto_tree_add_item(subtree, hf_charlist_entry_name, s.tvb, s.offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
-                            s.offset += tvb_get_guint16(s.tvb, s.offset, ENC_LITTLE_ENDIAN) + 2;
-                            proto_tree_add_item(subtree, hf_charlist_entry_world, s.tvb, s.offset, 2, ENC_LITTLE_ENDIAN | ENC_ASCII);
-                            s.offset += tvb_get_guint16(s.tvb, s.offset, ENC_LITTLE_ENDIAN) + 2;
+                            dissect_push_tree(&s, hf_char, ett_char);
+                            dissect_string(&s, hf_charlist_entry_name);
+                            dissect_string(&s, hf_charlist_entry_world);
 
                             ipv4_offset = s.offset;
-                            proto_tree_add_item(subtree, hf_charlist_entry_ip, s.tvb, s.offset, 4, ENC_BIG_ENDIAN);
+                            proto_tree_add_item(s.tree.top, hf_charlist_entry_ip, s.tvb, s.offset, 4, ENC_BIG_ENDIAN);
                             s.offset += 4;
 
+                            port = dissect_u16(&s, hf_charlist_entry_port);
 
-                            port = tvb_get_guint16(s.tvb, s.offset, ENC_LITTLE_ENDIAN);
-
-                            proto_tree_add_item(subtree, hf_charlist_entry_port, s.tvb, s.offset, 2, ENC_LITTLE_ENDIAN);
-                            s.offset += 2;
-
-
+                            dissect_pop_tree(&s);
 
                             if (convo->has.rsa_blocks) {
                                 struct rsakey *entry = g_new(struct rsakey, 1);
@@ -1243,9 +1312,11 @@ static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *t
                                 }
                             }
                         }
+
+                        dissect_pop_tree(&s);
                     }
 
-                    proto_tree_add_item(s.tree, hf_pacc_days, s.tvb, s.offset, 2, ENC_LITTLE_ENDIAN);
+                    proto_tree_add_item(s.tree.top, hf_pacc_days, s.tvb, s.offset, 2, ENC_LITTLE_ENDIAN);
                     s.offset += 2;
                 }
                 break;
@@ -1253,7 +1324,7 @@ static int tibia_dissect_loginserv_packet(struct tibia_convo *convo, tvbuff_t *t
                 dissect_unknown(&s, len - s.offset);
         }
 
-        proto_item_set_end(s.tree, s.tvb, s.offset);
+        proto_item_set_end(s.tree.top, s.tvb, s.offset);
 
         str = try_val_to_str(cmd, from_loginserv_packet_types);
         str = str ? str : "Unknown";
@@ -1297,13 +1368,13 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
 
     while (s.offset < len) {
         proto_item *subti = proto_tree_add_item(mytree, hf_gameserv_command, s.tvb, s.offset, 1, ENC_NA);
-        s.tree = proto_item_add_subtree(subti, ett_command);
+        s.tree.top = proto_item_add_subtree(subti, ett_command);
 
         switch (cmd = tvb_get_guint8(s.tvb, s.offset++)) {
             case S_DLG_INFO:
             case S_DLG_ERROR:
             case S_DLG_TOOMANYPLAYERS:
-                dissect_string(&s, cmd == S_DLG_ERROR ? hf_dlg_error : hf_dlg_info, NULL);
+                dissect_string(&s, cmd == S_DLG_ERROR ? hf_dlg_error : hf_dlg_info);
                 break;
             case S_MAPINIT: /* 0x0A, Long playerCreatureId Int unknownU16 (Byte reportBugs?) */
                 dissect_unknown(&s, len - s.offset);
@@ -1339,8 +1410,8 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
                 break;
             case S_CONTAINER: /* 0x6e,Byte index Short containerIcon Byte slotCount ThingDescription item */
                 dissect_container(&s);
-                dissect_u16(&s, hf_u16, "Container icon");
-                dissect_u16(&s, hf_container_slots, NULL);
+                dissect_u16(&s, hf_u16); /* Container icon */
+                dissect_u16(&s, hf_container_slots);
                 dissect_unknown(&s, len - s.offset);
                 break;
             case S_CONTAINERCLOSE: /* 0x6f,Byte index */
@@ -1352,27 +1423,27 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
                 break;
             case S_TRANSFORMITEMCONTAINER:/* 0x71,Byte index Byte slot */
                 dissect_container(&s);
-                dissect_u8(&s, hf_container_slot, NULL);
+                dissect_u8(&s, hf_container_slot);
                 dissect_unknown(&s, len - s.offset);
                 break;
             case S_REMOVEITEMCONTAINER: /* 0x72,Byte index Byte slot */
                 dissect_container(&s);
-                dissect_u8(&s, hf_container_slot, NULL);
+                dissect_u8(&s, hf_container_slot);
                 break;
             case S_INVENTORYEMPTY: /* 0x78,Byte invSlot */
-                dissect_u8(&s, hf_inventory, NULL);
+                dissect_u8(&s, hf_inventory);
                 break;
             case S_INVENTORYITEM: /* 0x79,Byte invSlot ThingDescription itm */
-                dissect_u8(&s, hf_inventory, NULL);
+                dissect_u8(&s, hf_inventory);
                 dissect_unknown(&s, len - s.offset);
                 break;
             case S_TRADEREQ: /* 0x7d,String otherperson Byte slotCount ThingDescription itm */
-                dissect_string(&s, hf_player, NULL);
+                dissect_string(&s, hf_player);
                 dissect_inventory(&s);
                 dissect_unknown(&s, len - s.offset);
                 break;
             case S_TRADEACK: /* 0x7e,String otherperson Byte slotCount ThingDescription itm */
-                dissect_string(&s, hf_player, NULL);
+                dissect_string(&s, hf_player);
                 dissect_inventory(&s);
                 dissect_unknown(&s, len - s.offset);
                 break;
@@ -1380,44 +1451,44 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
             case S_TRADECLOSE: /* 0x7f, */
                 break;
             case S_LIGHTLEVEL: /* 0x82,Byte lightlevel Byte lightcolor */
-                dissect_u8(&s, hf_u8, "Level");
-                dissect_u8(&s, hf_u8, "Color");
+                dissect_u8(&s, hf_u8 /* , "Level" */);
+                dissect_u8(&s, hf_u8 /* , "Color" */);
                 break;
             case S_MAGIC_EFFECT: /* 0x83, */
                 dissect_coord(&s);
-                dissect_u8(&s, hf_u8, "Effect ID");
+                dissect_u8(&s, hf_u8 /* , "Effect ID" */);
                 break;
             case S_ANIMATEDTEXT: /* 0x84,Coord pos Byte color String message */
                 dissect_coord(&s);
-                dissect_u8(&s, hf_u8, "Color");
-                dissect_string(&s, hf_str, "Message");
+                dissect_u8(&s, hf_u8 /* , "Color" */);
+                dissect_string(&s, hf_str /* , "Message" */);
                 break;
             case S_DISTANCESHOT: /* 0x85,Coord pos1 Byte stackposition Coord pos2 */
                 dissect_coord(&s);
-                dissect_u8(&s, hf_u8, "Projectile");
+                dissect_u8(&s, hf_u8 /* , "Projectile" */);
                 dissect_coord(&s);
                 break;
             case S_CREATURESQUARE: /* 0x86,Long creatureid Byte squarecolor */
-                dissect_u32(&s, hf_creature, NULL);
-                dissect_u8(&s, hf_u8, "Color");
+                dissect_u32(&s, hf_creature);
+                dissect_u8(&s, hf_u8 /* , "Color" */);
                 break;
             case S_CREATURE_HEALTH: /* 0x8C, */
-                dissect_u32(&s, hf_creature, NULL);
-                dissect_u8(&s, hf_u8, "Percent");
+                dissect_u32(&s, hf_creature);
+                dissect_u8(&s, hf_u8 /* , "Percent" */);
                 break;
             case S_CREATURELIGHT: /* 0x8d,Long creatureid Byte ? Byte ? */
-                dissect_u32(&s, hf_creature, NULL);
+                dissect_u32(&s, hf_creature);
                 dissect_unknown(&s, 2);
                 break;
             case S_SETOUTFIT: /* 0x8e,Long creatureid Byte lookType Byte headType Byte bodyType Byte legsType Byte feetType // can extended look go here too? */
-                dissect_u32(&s, hf_creature, NULL);
+                dissect_u32(&s, hf_creature);
                 dissect_unknown(&s, len - s.offset);
                 break;
             case S_TEXTWINDOW: /* 0x96,Long windowId Byte icon Byte maxlength String message */
-                dissect_u32(&s, hf_window, NULL);
-                dissect_u8(&s, hf_u8, "Icon");
-                dissect_u8(&s, hf_u8, "Max length");
-                dissect_string(&s, hf_str, "Message");
+                dissect_u32(&s, hf_window);
+                dissect_u8(&s, hf_u8 /*, "Icon" */);
+                dissect_u8(&s, hf_u8 /*, "Max length" */);
+                dissect_string(&s, hf_str /*, "Message" */);
                 break;
             case S_PLAYER_CONDITION: /* 0xA2, */
                 dissect_player_condition(&s);
@@ -1428,18 +1499,18 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
                 dissect_channel_open(&s);
                 break;
             case S_OPENPRIV: /* 0xAD,String playerName */
-                dissect_string(&s, hf_player, NULL);
+                dissect_string(&s, hf_player);
                 break;
             case S_TEXTMESSAGE: /* 0xB4,Byte msgClass String string */
-                dissect_u8(&s, hf_u8, "Class");
-                dissect_string(&s, hf_player, NULL);
+                dissect_u8(&s, hf_u8 /*, "Class" */);
+                dissect_string(&s, hf_player);
                 break;
             case S_CANCELWALK: /* 0xB5,Byte direction */
-                dissect_u8(&s, hf_u8, "Direction");
+                dissect_u8(&s, hf_u8/*, "Direction" */);
                 break;
             case S_VIPADD: /* 0xd2,long guid string name byte isonline */
                 dissect_vip(&s);
-                dissect_string(&s, hf_player, NULL);
+                dissect_string(&s, hf_player);
                 dissect_unknown(&s, 1);
                 break;
             case S_VIPLOGIN: /* 0xd3,long guid */
@@ -1472,7 +1543,7 @@ static int tibia_dissect_gameserv_packet(struct tibia_convo *convo, tvbuff_t *tv
                 dissect_unknown(&s, len - s.offset);
         }
 
-        proto_item_set_end(s.tree, s.tvb, s.offset);
+        proto_item_set_end(s.tree.top, s.tvb, s.offset);
 
         str = try_val_to_str(cmd, from_gameserv_packet_types);
         str = str ? str : "Unknown";
@@ -1499,7 +1570,7 @@ static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb,
 
     while (s.offset < len) {
         proto_item *subti = proto_tree_add_item(mytree, hf_client_command, s.tvb, s.offset, 1, ENC_NA);
-        s.tree = proto_item_add_subtree(subti, ett_command);
+        s.tree.top = proto_item_add_subtree(subti, ett_command);
 
         switch (cmd = tvb_get_guint8(s.tvb, s.offset++)) {
             /*case C_MOVE_ITEM:*/
@@ -1511,7 +1582,7 @@ static int tibia_dissect_client_packet(struct tibia_convo *convo, tvbuff_t *tvb,
             default:
                 dissect_unknown(&s, len - s.offset);
         }
-        proto_item_set_end(s.tree, s.tvb, s.offset);
+        proto_item_set_end(s.tree.top, s.tvb, s.offset);
 
         str = try_val_to_str(cmd, from_client_packet_types);
         str = str ? str : "Unknown";
@@ -1870,6 +1941,11 @@ proto_register_tibia(void)
                 FT_NONE, BASE_NONE, NULL, 0x0,
                 NULL, HFILL }
         },
+        { &hf_char,
+            { "Character", "tibia.char",
+                FT_NONE, BASE_NONE, NULL, 0x0,
+                NULL, HFILL }
+        },
         { &hf_charlist_length,
             { "Character count", "tibia.charlist.count",
                 FT_UINT8, BASE_DEC,
@@ -1895,6 +1971,46 @@ proto_register_tibia(void)
                 NULL, HFILL }
         },
         { &hf_charlist_entry_port,
+            { "Port", "tibia.charlist.port",
+                FT_UINT16, BASE_DEC,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_worldlist,
+            { "World list", "tibia.worldlist",
+                FT_NONE, BASE_NONE, NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_world,
+            { "World", "tibia.world",
+                FT_NONE, BASE_NONE, NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_worldlist_entry_name,
+            { "World", "tibia.worldlist.name",
+                FT_UINT_STRING, BASE_NONE,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_worldlist_length,
+            { "World count", "tibia.worldlist.count",
+                FT_UINT16, BASE_DEC,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_worldlist_entry_id,
+            { "World ID", "tibia.worldlist.id",
+                FT_UINT8, BASE_DEC,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_worldlist_entry_ip,
+            { "IP", "tibia.worldlist.ip",
+                FT_UINT_STRING /*FT_IPv4*/, BASE_NONE,
+                NULL, 0x0,
+                NULL, HFILL }
+        },
+        { &hf_worldlist_entry_port,
             { "Port", "tibia.charlist.port",
                 FT_UINT16, BASE_DEC,
                 NULL, 0x0,
@@ -2050,6 +2166,9 @@ proto_register_tibia(void)
         &ett_file_versions,
         &ett_client_info,
         &ett_charlist,
+        &ett_char,
+        &ett_worldlist,
+        &ett_world,
     };
 
     static ei_register_info ei[] = {
@@ -2113,8 +2232,8 @@ proto_register_tibia(void)
 
     xteakeys_uat = uat_new("XTEA Keys",
             sizeof(struct xteakeys_assoc),
-            "tibia_xtea_keys",       // filename 
-            /*NULL,*/
+            /*"tibia_xtea_keys",       // filename */
+            NULL,
             TRUE,                    /* from_profile */
             &xteakeylist_uats,       /* data_ptr */
             &nxteakeys,              /* numitems_ptr */
