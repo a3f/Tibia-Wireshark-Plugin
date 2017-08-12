@@ -5,7 +5,7 @@ This dissector has been submitted as built-in dissector for [Wireshark Code Revi
 Some of the functionality necessary here has been proposed as changes to Wireshark utility libraries. Till these are merged, building this project will fail. Instead, just checkout and build the feature branch uploaded for code review:
 
 ```
-git fetch ssh://a3f@code.wireshark.org:29418/wireshark refs/changes/55/23055/3 && git checkout FETCH_HEAD
+git fetch ssh://code.wireshark.org:29418/wireshark refs/changes/55/23055/3 && git checkout FETCH_HEAD
 ```
 
 ## Tibia Wireshark Plugin
@@ -92,5 +92,5 @@ no code of Cipsoft GmbH was used.
 
 Tibia is a registered trademark of Cipsoft GmbH.
 
-[macos-screenshot]: https://github.com/a3f/Bowdlator/blob/master/screenshot.png
+[macos-screenshot]: https://github.com/a3f/Tibia-Wireshark-Plugin/blob/master/screenshot.png
 
