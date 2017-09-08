@@ -1,14 +1,27 @@
-# Now Feature Complete! (and Repo no longer builds)
+![screenshot][macos-screenshot]
 
-This dissector has been submitted as built-in dissector for [Wireshark Code Review](https://code.wireshark.org/review/#/c/23055/). Let's hope this becomes part of Wireshark v2.6.0. :-)
+# This is now in the Wireshark master branch
 
-Some of the functionality necessary here has been proposed as changes to Wireshark utility libraries. Till these are merged, building this project will fail. Instead, just checkout and build the feature branch uploaded for code review:
+This dissector was submitted and [accepted](https://code.wireshark.org/review/#/c/23055/) as built-in dissector for [Wireshark](https://wireshark.org). The next release will be Wireshark 2.6.0 scheduled for summer 2018.
+
+Till then, you can fetch a nightly Windows or macOS build from [https://www.wireshark.org/download/automated](https://www.wireshark.org/download/automated). Just take the most recent Wireshark 2.5.0.
+
+On Linux you'll have to build Wireshark yourself:
 
 ```
-git fetch ssh://code.wireshark.org:29418/wireshark refs/changes/55/23055/3 && git checkout FETCH_HEAD
+git clone https://code.wireshark.org/review/wireshark
+cd wireshark
+./configure
+make
+make install
 ```
 
-## Tibia Wireshark Plugin
+The dissector was added in these two commits:
+
+* [Add Tibia login protocol dissector](https://github.com/wireshark/wireshark/commit/6a67ba5677b28d8ce4e8b775ee93573297784e0a)
+* [Add basic Tibia game protocol dissection](https://github.com/wireshark/wireshark/commit/62c9a8a865779299d5e06cb929680e4bba92d4e7)
+
+## Tibia Wireshark Dissector
 
 Tibia is a MMORPG developed by Cipsoft GmbH. OTServ is the open-source implementation of the game server.
 
@@ -20,10 +33,6 @@ In case the private key is provided, Login packets will be decoded to acquire th
 OTServ's private key is included by default, so decoding most OTServ traffic should work out of the box.
 
 Game protocol support is quite incomplete, but it should be able to decrypt all Tibia packets from Tibia 7.00 up.
-
-## Screenshot
-
-![screenshot][macos-screenshot]
 
 ## Long Version
 
@@ -86,11 +95,13 @@ An official slide set by Cipsoft detailing the architecture of Tibia
 from Game Developers Conference Europe 2011 is also available:
 http://www.gdcvault.com/play/1014908/Inside-Tibia-The-Technical-Infrastructure
 
-The protocol, as implemented here, has been inferred from network footage
-and game client execution traces and was written from scratch. Especially,
-no code of Cipsoft GmbH was used.
+The login protocol, as implemented here, has been inferred from network
+footage and game client execution traces and was written from scratch.
+The listing of game protocol commands were taken from TibiaAPI and Khaos' spec
+No code of Cipsoft GmbH was used.
 
 Tibia is a registered trademark of Cipsoft GmbH.
+
 
 [macos-screenshot]: https://github.com/a3f/Tibia-Wireshark-Plugin/blob/master/screenshot.png
 
