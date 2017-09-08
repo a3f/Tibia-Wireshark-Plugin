@@ -25,7 +25,7 @@ The dissector was added in these two commits:
 
 Tibia is a MMORPG developed by Cipsoft GmbH. OTServ is the open-source implementation of the game server.
 
-This Wireshark dissector decodes the game's communication protocol. It supports all versions from Tibia 7.0 up to Tibia 11.42 (2001-2017). 
+This Wireshark dissector decodes the game's communication protocol. It supports all versions from Tibia 7.0 up to Tibia 11.00 (2001-2016). 
 
 Newer versions of the protocol use RSA/XTEA in order to provide a secure communication channel. 
 In order to dissect packets on these versions, the symmetric (XTEA) key need be provided manually via the preferences Dialog.
@@ -47,7 +47,7 @@ the character list over HTTPS. It's possible this is done in the same manner
 as in the native client from 10.74 up. We don't support the Flash client.
 
 The dissector supports Tibia versions from 7.0 (2001) till current
-11.42 (2017-08-12). Tibia has an active open source server emulator
+11.00 (2016-10-12). Tibia has an active open source server emulator
 community (OTServ) that still makes use of older versions and surpasses
 the official servers in popularity, therefore compatibility with older
 protocol iterations should be maintained.
