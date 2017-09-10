@@ -21,6 +21,8 @@ The dissector was added in these two commits:
 * [Add Tibia login protocol dissector](https://github.com/wireshark/wireshark/commit/6a67ba5677b28d8ce4e8b775ee93573297784e0a)
 * [Add basic Tibia game protocol dissection](https://github.com/wireshark/wireshark/commit/62c9a8a865779299d5e06cb929680e4bba92d4e7)
 
+One commit errornously states 11.42 compatibility. This is not (yet) the case.
+
 ## Tibia Wireshark Dissector
 
 Tibia is a MMORPG developed by Cipsoft GmbH. OTServ is the open-source implementation of the game server.
@@ -46,7 +48,7 @@ except that the session key for the Flash client is transported alongside
 the character list over HTTPS. It's possible this is done in the same manner
 as in the native client from 10.74 up. We don't support the Flash client.
 
-The dissector supports Tibia versions from 7.0 (2001) till current
+The dissector supports Tibia versions from 7.0 (2001) till
 11.00 (2016-10-12). Tibia has an active open source server emulator
 community (OTServ) that still makes use of older versions and surpasses
 the official servers in popularity, therefore compatibility with older
@@ -69,6 +71,11 @@ game server.
 Starting with Tibia 7.61, login server requests can't be reliably
 differentiated from game server requests. Therefore we apply some heuristics
 to classify packets.
+
+Starting with Tibia 11.01, a web service takes the role of the login server.
+Starting with Tibia 11.11, the Adler32 checksum was replaced by a 32-bit
+sequence number. The most significant bit indicates whether the packet was
+DEFLATE-compressed. These features are not yet supported.
 
 Packets from and to the game server contain commands. Commands are
 identified by the first octet and are variable in length. The dissector has
