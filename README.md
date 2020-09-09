@@ -1,20 +1,7 @@
-![screenshot][macos-screenshot]
+# This is outdated. The most recent version is now in upstream Wireshark
 
-# This is now in the Wireshark master branch
 
-This dissector was submitted and [accepted](https://code.wireshark.org/review/#/c/23055/) as built-in dissector for [Wireshark](https://wireshark.org). The next release will be Wireshark 2.6.0 scheduled for summer 2018.
-
-Till then, you can fetch a nightly Windows or macOS build from [https://www.wireshark.org/download/automated](https://www.wireshark.org/download/automated). Just take the most recent Wireshark 2.5.0.
-
-On Linux you'll have to build Wireshark yourself:
-
-```
-git clone https://code.wireshark.org/review/wireshark
-cd wireshark
-./configure
-make
-make install
-```
+This dissector was submitted and [accepted](https://code.wireshark.org/review/#/c/23055/) as built-in dissector for [Wireshark](https://wireshark.org) and is shipped with Wireshark >=2.6.0.
 
 The dissector was added in these two commits:
 
@@ -24,6 +11,8 @@ The dissector was added in these two commits:
 One commit errornously states 11.42 compatibility. This is not (yet) the case.
 
 ## Tibia Wireshark Dissector
+
+![screenshot][macos-screenshot]
 
 Tibia is a MMORPG developed by Cipsoft GmbH. OTServ is the open-source implementation of the game server.
 
